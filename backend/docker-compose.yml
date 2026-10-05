@@ -1,0 +1,51 @@
+name: paper-app
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-paper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-paper}
+      POSTGRES_DB: ${POSTGRES_DB:-paper}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paper} -d ${POSTGRES_DB:-paper}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    profiles: ["qdrant"]
+
+  api:
+    build:
+      context: .
+      args:
+        EXTRAS: "[postgres,openai,html]"
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-paper}:${POSTGRES_PASSWORD:-paper}@db:5432/${POSTGRES_DB:-paper}
+      VECTOR_BACKEND: ${VECTOR_BACKEND:-pgvector}
+      STORAGE_ROOT: /data/blobs
+    ports:
+      - "8000:8000"
+    volumes:
+      - blobdata:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["app"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  qdrantdata:
+  blobdata:
