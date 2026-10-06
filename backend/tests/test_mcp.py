@@ -75,16 +75,20 @@ def _decode(result) -> dict:  # noqa: ANN001, ANN202
     return json.loads(text)
 
 
-def call(server, name: str, **arguments) -> dict:  # noqa: ANN001
+# The tool name and the argument dict are positional-only on purpose. Naming the
+# tool parameter `name` collided with tools that *have* an argument called `name`
+# (`list_authors`), so `acall(s, "list_authors", name="Ada")` raised TypeError
+# instead of calling the tool.
+def call(_server, _tool: str, /, **arguments) -> dict:  # noqa: ANN001
     """Invoke a tool the way the protocol layer does (from sync tests)."""
     import anyio
 
-    return _decode(anyio.run(server.call_tool, name, arguments))
+    return _decode(anyio.run(_server.call_tool, _tool, arguments))
 
 
-async def acall(server, name: str, **arguments) -> dict:  # noqa: ANN001
+async def acall(_server, _tool: str, /, **arguments) -> dict:  # noqa: ANN001
     """Same, for tests that are already inside an event loop."""
-    return _decode(await server.call_tool(name, arguments))
+    return _decode(await _server.call_tool(_tool, arguments))
 
 
 async def ingest_into(container, space=None, arxiv_id: str = "1706.03762") -> str:  # noqa: ANN001
@@ -127,16 +131,81 @@ class TestRegistration:
             "list_project_papers",
             "list_references",
             "list_assets",
+            # Corpus discovery: "what is in here?" without a semantic query.
+            "search_equations",
+            "list_categories",
+            "list_authors",
+            "most_cited_references",
+            "list_ingest_runs",
+            # Maintenance: every one of these writes.
+            "reembed_space",
+            "chunk_kinds",
+            "set_paper_read",
+            "delete_project",
         }
 
     def test_read_only_tools_are_annotated(self, mcp_server) -> None:
-        """Clients use this to auto-approve cheap calls."""
+        """Clients use this to auto-approve cheap calls.
+
+        The converse matters just as much: a tool that writes must never claim to
+        be read-only, or a client would auto-approve a corpus mutation.
+        """
         import anyio
 
         tools = {t.name: t for t in anyio.run(mcp_server.list_tools)}
-        for name in ("search_arxiv", "get_paper", "ask_paper_corpus", "read_chunks", "status"):
+        read_only = {
+            "search_arxiv",
+            "get_paper",
+            "ask_paper_corpus",
+            "read_chunks",
+            "read_markdown",
+            "list_papers",
+            "list_embedding_spaces",
+            "status",
+            "list_projects",
+            "list_project_papers",
+            "list_references",
+            "list_assets",
+            "search_equations",
+            "list_categories",
+            "list_authors",
+            "most_cited_references",
+            "list_ingest_runs",
+        }
+        for name in read_only:
             assert tools[name].annotations.read_only_hint is True, name
-        assert tools["ingest_paper"].annotations.read_only_hint is False
+        for name in (
+            "ingest_paper",
+            "create_project",
+            "import_papers_to_project",
+            "reembed_space",
+            "chunk_kinds",
+            "set_paper_read",
+            "delete_project",
+        ):
+            assert tools[name].annotations.read_only_hint is False, name
+
+    def test_delete_project_is_the_only_destructive_tool(self, mcp_server) -> None:
+        """Destructive means papers go; re-embedding only adds vectors."""
+        import anyio
+
+        tools = {t.name: t for t in anyio.run(mcp_server.list_tools)}
+        destructive = {
+            name for name, t in tools.items() if t.annotations.destructive_hint
+        }
+        assert destructive == {"delete_project"}
+
+    def test_chunk_kinds_documents_that_it_can_write(self, mcp_server) -> None:
+        """Its default is read-only in *behaviour* but not in annotation.
+
+        A single tool that reports or relabels is one lookup rather than two,
+        and marking it non-read-only is the safe direction to be wrong in.
+        """
+        import anyio
+
+        tools = {t.name: t for t in anyio.run(mcp_server.list_tools)}
+        assert tools["chunk_kinds"].annotations.read_only_hint is False
+        assert "report" in tools["chunk_kinds"].description or ""
 
     def test_ingest_is_marked_non_destructive(self, mcp_server) -> None:
         """Re-ingesting replaces vectors, so it is idempotent, not destructive."""

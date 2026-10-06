@@ -115,6 +115,10 @@ class QdrantVectorStore(VectorStore):
     async def delete_for_papers(self, paper_ids: list[str]) -> int:
         from qdrant_client.models import FilterSelector  # noqa: PLC0415
 
+        # An empty list means "delete nothing", but a `MatchAny` over an empty
+        # list is rejected by Qdrant outright — so this cannot be pushed down.
+        if not paper_ids:
+            return 0
         client = self._get_client()
         await client.delete(
             collection_name=self._collection,

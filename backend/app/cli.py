@@ -752,11 +752,16 @@ def projects_read(
             except PaperNotFoundError as exc:
                 console.print(f"[red]{exc}[/red]")
                 return 2
-            targets = (
-                (await projects.resolve_paper_ids([paper_id]))[0]
+            targets, outside = (
+                await projects.link_paper_ids(found, [paper_id])
                 if paper_id
-                else await projects.paper_ids(found)
+                else (await projects.paper_ids(found), [])
             )
+            if outside:
+                # Membership, not just existence: a corpus paper the project does
+                # not hold would update zero rows and still report success.
+                console.print(f"[red]{paper_id} is not in project {found.slug!r}[/red]")
+                return 2
             changed = 0
             for target in targets:
                 if await projects.set_read(found, target, is_read=not unread):
@@ -787,6 +792,14 @@ def assets(
     kind: Annotated[
         str, typer.Option("--kind", "-k", help="figures | tables | equations | all")
     ] = "all",
+    project: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            "-p",
+            help="List figures/tables/equations across a whole project instead of one paper.",
+        ),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", "-n", min=1, max=500)] = 20,
     display_only: Annotated[
         bool, typer.Option("--display", help="Equations: only numbered display math.")
@@ -807,6 +820,12 @@ def assets(
         from app.db.asset_repository import AssetRepository
 
         container = get_container()
+        if project:
+            # Project-wide listing. An asset question is often a corpus question
+            # ("show me every figure about the sheaf laplacian"), and per-paper
+            # paging through 36 papers to answer it is the wrong tool.
+            return await _assets_across_project(container, project, want, limit, display_only)
+
         async with container.session_factory() as session:
             paper = await _paper_or_none(session, arxiv_id)
             if paper is None:
@@ -1073,8 +1092,20 @@ def ask(
         list[str] | None,
         typer.Option("--paper", help="Limit to these arXiv ids. Repeatable."),
     ] = None,
+    source: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--source",
+            help="Limit to chunks from this source: arxiv_html, ar5iv, pdf_mineru, "
+            "pdf_pypdf, abstract_only. Repeatable.",
+        ),
+    ] = None,
+    min_score: Annotated[
+        float | None,
+        typer.Option("--min-score", min=0.0, max=1.0, help="Drop hits below this cosine score."),
+    ] = None,
 ) -> None:
-    """Semantic search, scoped by project, by paper and by content kind."""
+    """Semantic search, scoped by project, by paper, by content kind and by source."""
 
     async def run() -> int:
         from app.container import get_container
@@ -1082,6 +1113,7 @@ def ask(
 
         try:
             kinds = _parse_kinds(content)
+            srcs = _parse_sources(source)
         except ValueError as exc:
             console.print(f"[red]{exc}[/red]")
             return 2
@@ -1094,14 +1126,22 @@ def ask(
             session_factory=container.session_factory,
             space=target,
         )
-        hits = await service.search(
-            question,
-            top_k=top_k,
-            category=category,
-            project=project,
-            content_kinds=kinds,
-            paper_ids=list(paper) if paper else None,
-        )
+        try:
+            hits = await service.search(
+                question,
+                top_k=top_k,
+                category=category,
+                project=project,
+                content_kinds=kinds,
+                paper_ids=list(paper) if paper else None,
+                sources=srcs,
+                min_score=min_score,
+            )
+        except LookupError as exc:
+            # e.g. an unknown project slug. HTTP answers 404 and MCP a structured
+            # error; a raw traceback out of the CLI would be the outlier.
+            console.print(f"[red]{exc}[/red]")
+            return 2
         console.print(f"[dim]space {target.name} | {target.model} | {target.dimensions}d[/dim]")
         scope = service.last_scope
         if scope.get("project"):
@@ -1144,6 +1184,15 @@ def ask(
 def show(
     arxiv_id: Annotated[str, typer.Argument()],
     chunks: Annotated[int, typer.Option("--chunks", "-c", min=0, max=200)] = 3,
+    content: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--content",
+            "-C",
+            help="Only these chunk kinds: body, abstract, figure, table, equation, "
+            "reference, code. Repeatable.",
+        ),
+    ] = None,
 ) -> None:
     """Show what is stored locally for a paper."""
 
@@ -1151,13 +1200,24 @@ def show(
         from app.db.repositories import ChunkRepository, PaperRepository
         from app.db.session import get_session_factory
 
+        try:
+            kinds = _parse_kinds(content)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            return 2
+
         factory = get_session_factory()
         async with factory() as session:
             paper = await PaperRepository(session).get_by_arxiv_id(arxiv_id)
             if paper is None:
                 console.print(f"[yellow]{arxiv_id} is not ingested[/yellow]")
                 return 1
-            rows = await ChunkRepository(session).list_for_paper(paper.id, limit=chunks or None)
+            chunks_repo = ChunkRepository(session)
+            # `limit=chunks or None`: `-c 0` means "print the header only".
+            rows = await chunks_repo.list_for_paper(
+                paper.id, limit=chunks or None, content_kinds=kinds
+            )
+            total = await chunks_repo.count(paper.id, content_kinds=kinds)
             body = (
                 f"[bold]{paper.title}[/bold]\n\n"
                 f"id         : {paper.versioned_id}\n"
@@ -1166,12 +1226,19 @@ def show(
                 f"published  : {paper.published_at}\n"
                 f"ingested   : {paper.ingested_at}\n"
                 f"html       : {paper.html_url or '-'}\n"
-                f"pdf        : {paper.pdf_url}"
+                f"pdf        : {paper.pdf_url}\n"
+                f"chunks     : {total}"
+                f"{' of ' + str(await chunks_repo.count(paper.id)) + ' matching ' + '+'.join(kinds) if kinds else ''}"
             )
             console.print(Panel(body, title="paper", border_style="cyan"))
             for row in rows:
-                console.print(f"\n[cyan]#{row.ordinal}[/cyan] [dim]{row.heading or ''}[/dim]")
+                console.print(
+                    f"\n[cyan]#{row.ordinal}[/cyan] [dim]{row.heading or ''}[/dim]"
+                    f" [green]{row.content_kind}[/green]"
+                )
                 console.print(row.text[:500])
+            if kinds and not rows:
+                console.print(f"\n[yellow]no {', '.join(kinds)} chunks in this paper[/yellow]")
         return 0
 
     raise typer.Exit(asyncio.run(run()))
@@ -1419,8 +1486,11 @@ def reembed(
                 limit=limit,
             )
         except LookupError as exc:
+            # An unknown paper or project means the command was asked for the
+            # wrong thing, not that it failed: exit 2 like the other validation
+            # paths, so a script can tell "bad input" from "nothing to do".
             console.print(f"[red]{exc}[/red]")
-            return 1
+            return 2
         console.print(f"[green]{report.summary()}[/green]")
         for failure in report.failures:
             console.print(f"[red]{failure}[/red]")
@@ -1676,6 +1746,67 @@ def _parse_kinds(values: list[str] | None) -> list[str] | None:
     return parse_kinds(values)
 
 
+async def _assets_across_project(
+    container,  # noqa: ANN001
+    project: str,
+    want: set[str],
+    limit: int,
+    display_only: bool,
+) -> int:
+    """List assets across every paper a project holds."""
+    from app.db.asset_repository import AssetRepository
+    from app.db.project_repository import PaperNotFoundError, ProjectRepository
+
+    async with container.session_factory() as session:
+        repo = ProjectRepository(session)
+        try:
+            found = await repo.require(project)
+        except PaperNotFoundError:
+            console.print(f"[red]no project matching {project!r}[/red]")
+            return 2
+        papers = await repo.list_papers(found, limit=limit)
+        asset_repo = AssetRepository(session, blobs=container.blob_store)
+        rows: list[tuple[str, dict[str, int]]] = []
+        for paper, _link in papers:
+            counts = await asset_repo.count(paper.id)
+            if counts["figures"] or counts["tables"] or counts["display_equations"]:
+                rows.append((paper.arxiv_id, counts))
+
+    console.print(
+        f"[bold]{project}[/bold] [dim]· {len(rows)} papers with assets[/dim]\n"
+    )
+    if not rows:
+        console.print("[yellow]no figures, tables or equations in this project[/yellow]")
+        return 1
+    table = Table(box=None, pad_edge=False)
+    table.add_column("arxiv_id", style="cyan", no_wrap=True)
+    table.add_column("figures", justify="right")
+    table.add_column("tables", justify="right")
+    table.add_column("display eq", justify="right")
+    table.add_column("inline", justify="right")
+    for arxiv_id, counts in rows:
+        table.add_row(
+            arxiv_id,
+            str(counts["figures"]),
+            str(counts["tables"]),
+            str(counts["display_equations"]),
+            str(counts["equations"] - counts["display_equations"]),
+        )
+    console.print(table)
+    console.print(
+        f"\n[dim]showing {len(rows)} of the project's papers; "
+        "pass a paper id to `paper assets` for captions and image URLs.[/dim]"
+    )
+    return 0
+
+
+def _parse_sources(values: list[str] | None) -> list[str] | None:
+    """Validate ``--source`` values. Raises ValueError on an unknown source."""
+    from app.services.semantic_search import parse_sources
+
+    return parse_sources(values)
+
+
 async def _resolve(container, name: str | None):  # noqa: ANN001
     from app.db.space_repository import EmbeddingSpaceRepository
 
@@ -1717,6 +1848,11 @@ def _render_runs(result) -> None:  # noqa: ANN001
 def main() -> None:  # pragma: no cover
     app()
 
+
+# Imported last, and for its side effect: `session` is a Typer command on `app`,
+# and it needs names from this module. Registering it here rather than above
+# keeps the circular import one-directional.
+from app import cli_session  # noqa: E402, F401  # isort: skip
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(app())

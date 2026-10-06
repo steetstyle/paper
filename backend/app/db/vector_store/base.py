@@ -48,13 +48,14 @@ class VectorFilter:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
-        return not (
-            self.paper_ids
-            or self.categories
-            or self.content_kinds
-            or self.sources
-            or self.extra
-        )
+        """True when nothing is being filtered on.
+
+        Distinct from :attr:`matches_nothing`: ``VectorFilter(paper_ids=[])`` is
+        a filter that matches nothing, so it is *not* empty. Kept separate so the
+        two cannot be confused — asking for no results is not the same as asking
+        for no filter.
+        """
+        return not self.matches_nothing and not self.extra
 
     @property
     def matches_nothing(self) -> bool:

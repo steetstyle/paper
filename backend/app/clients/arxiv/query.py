@@ -61,11 +61,36 @@ def build_search_query(query: SearchQuery) -> str:
 
 
 def build_search_params(query: SearchQuery) -> dict[str, str | int]:
-    params: dict[str, str | int] = {
+    """Request parameters for one page.
+
+    An ``id_list`` request sends **only** ``id_list``. Measured against the live
+    API, for the old-style id ``cond-mat/0404680v1``:
+
+    =======================================  ======  ======
+    request                                  HTTP    entries
+    =======================================  ======  ======
+    ``search_query=id:cond-mat/0404680v1``    200     0
+    ``id_list=...`` with no ``search_query``  200     1
+    both together                             200     0
+    =======================================  ======  ======
+
+    The old-style form is not matched by the ``id:`` search field at all, and
+    sending it alongside ``id_list`` makes ArXiv ignore ``id_list`` entirely.
+    Both cases return an empty result indistinguishable from "no such paper",
+    which is how ``get_paper("cond-mat/0305062v1")`` came to report a missing
+    paper with no explanation. ``sortBy``/``sortOrder`` are dropped as well:
+    ArXiv answers that combination with a 500.
+    """
+    if query.id_list:
+        return {
+            "id_list": ",".join(query.id_list),
+            "start": max(0, query.start),
+            "max_results": max(1, query.max_results),
+        }
+    return {
         "search_query": build_search_query(query),
         "start": max(0, query.start),
         "max_results": max(1, query.max_results),
         "sortBy": query.sort_by,
         "sortOrder": query.sort_order,
     }
-    return params

@@ -70,6 +70,11 @@ class ChunkOut(ORMModel):
     heading: str | None = None
     section_path: list[str] = Field(default_factory=list)
     source: str
+    content_kind: str = Field(
+        default="body",
+        description="What this chunk is: body, abstract, figure, table, equation, "
+        "reference, code. The same value `--content` / `content_kinds` filters on.",
+    )
 
 
 class PaperDetail(PaperOut):

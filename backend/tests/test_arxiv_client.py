@@ -86,3 +86,148 @@ def test_parse_entry_without_authors() -> None:
     assert hit.metadata.authors == ()
     assert hit.metadata.categories == ()
     assert hit.metadata.primary_category is None
+
+
+class TestGetPaperFallback:
+    """`get_paper` must resolve old-style ids, and not give up on the first error.
+
+    Every id here is real and was measured against the live API. ArXiv is
+    inconsistent for the old-style (`archive/YYMMNNNN`) form: `id:` in a
+    `search_query` matches nothing at all, `cond-mat/0305062v1` answers HTTP 500
+    while its versionless form returns the paper, and `solv-int/9712001v2`
+    returns nothing because v2 was never published.
+    """
+
+    @staticmethod
+    def _client(*, bodies: list, settings=None):  # noqa: ANN205
+        from app.clients.arxiv.client import ArxivClient
+        from app.config import get_settings
+
+        payload = iter(bodies)
+
+        class Fake:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            async def get_text(self, url, params=None, **kw):  # noqa: ANN001, ANN003
+                self.calls.append(dict(params or {}))
+
+                class R:
+                    status_code = 200
+                    content = next(payload)
+                    headers: dict = {}
+
+                return R()
+
+        fetcher = Fake()
+        settings = settings or get_settings().arxiv
+        return ArxivClient(settings, fetcher), fetcher
+
+    @staticmethod
+    def _entry(arxiv_id: str, *, authors: int = 2) -> str:
+        names = "".join(
+            f"<author><name>Author {i}</name></author>" for i in range(authors)
+        )
+        return (
+            "<entry>"
+            f"<id>http://arxiv.org/abs/{arxiv_id}</id>"
+            f"<title>Paper {arxiv_id}</title>"
+            f"<summary>An abstract of some length.</summary>"
+            f"{names}"
+            "</entry>"
+        )
+
+    @pytest.mark.asyncio
+    async def test_old_style_id_resolves_through_id_list(self) -> None:
+        from app.clients.arxiv.parser import render_feed_xml
+
+        client, fetcher = self._client(
+            bodies=[render_feed_xml([self._entry("cond-mat/0404680v1")]).encode()]
+        )
+        metadata = await client.get_paper("cond-mat/0404680v1")
+        # arxiv_id is the versionless canonical form; version carries the rest.
+        assert metadata.arxiv_id == "cond-mat/0404680"
+        assert metadata.versioned_id == "cond-mat/0404680v1"
+        assert metadata.abstract
+        assert len(metadata.authors) == 2
+        # The request shape is the fix, not just the outcome.
+        assert fetcher.calls[0]["id_list"] == "cond-mat/0404680v1"
+        assert "search_query" not in fetcher.calls[0]
+
+    @pytest.mark.asyncio
+    async def test_a_500_falls_back_to_the_versionless_id(self) -> None:
+        """`cond-mat/0305062v1` 500s; `cond-mat/0305062` returns the paper."""
+        from app.clients.arxiv.parser import render_feed_xml
+        from app.infra.http import HttpError
+
+        error_body = render_feed_xml([self._entry("cond-mat/0305062v1")]).encode()
+        ok_body = render_feed_xml([self._entry("cond-mat/0305062v4")]).encode()
+
+        class Flaky:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            async def get_text(self, url, params=None, **kw):  # noqa: ANN001, ANN003
+                self.calls.append(dict(params or {}))
+                if len(self.calls) == 1:
+                    raise HttpError("boom", status_code=500)
+
+                class R:
+                    status_code = 200
+                    content = ok_body
+                    headers: dict = {}
+
+                return R()
+
+        from app.clients.arxiv.client import ArxivClient
+        from app.config import get_settings
+
+        fetcher = Flaky()
+        client = ArxivClient(get_settings().arxiv, fetcher)
+        metadata = await client.get_paper("cond-mat/0305062v1")
+        assert metadata.versioned_id == "cond-mat/0305062v4"
+        assert fetcher.calls[0]["id_list"] == "cond-mat/0305062v1"
+        assert fetcher.calls[1]["id_list"] == "cond-mat/0305062"
+        assert error_body  # keeps the fixture honest
+
+    @pytest.mark.asyncio
+    async def test_an_unpublished_version_falls_back_too(self) -> None:
+        """`solv-int/9712001v2` was never published; v1 exists."""
+        from app.clients.arxiv.parser import render_feed_xml
+
+        empty = render_feed_xml([], total=0).encode()
+        found = render_feed_xml([self._entry("solv-int/9712001v1")]).encode()
+        client, fetcher = self._client(bodies=[empty, found])
+        metadata = await client.get_paper("solv-int/9712001v2")
+        assert metadata.versioned_id == "solv-int/9712001v1"
+        assert [c["id_list"] for c in fetcher.calls] == [
+            "solv-int/9712001v2",
+            "solv-int/9712001",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_no_version_means_no_second_request(self) -> None:
+        from app.clients.arxiv.parser import render_feed_xml
+
+        client, fetcher = self._client(
+            bodies=[render_feed_xml([self._entry("cond-mat/0404680v1")]).encode()]
+        )
+        await client.get_paper("cond-mat/0404680v1")
+        assert len(fetcher.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_404_is_not_swallowed(self) -> None:
+        """Only a 500 is retried; a genuine 404 must surface."""
+        from app.infra.http import HttpError
+
+        class Failing:
+            async def get_text(self, url, params=None, **kw):  # noqa: ANN001, ANN003
+                raise HttpError("gone", status_code=404)
+
+        from app.clients.arxiv.client import ArxivClient
+        from app.config import get_settings
+
+        client = ArxivClient(get_settings().arxiv, Failing())
+        with pytest.raises(HttpError):
+            await client.get_paper("cond-mat/0404680v1")
+

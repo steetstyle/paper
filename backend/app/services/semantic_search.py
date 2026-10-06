@@ -7,17 +7,54 @@ DB so results carry full paper metadata.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.db.repositories import SemanticSearchRepository
 from app.db.spaces import EmbeddingSpace
 from app.db.vector_store.base import VectorFilter, VectorStore
+from app.domain.enums import ContentSource
 from app.domain.models import SearchHitWithScore, SearchResultPage
 from app.embeddings.base import EmbeddingProvider
 from app.logging import get_logger
+from app.services.chunk_kinds import parse_kinds
 
 logger = get_logger(__name__)
+
+#: Where chunk text can have come from, as stored in ``chunks.source``.
+_SOURCES = frozenset(source.value for source in ContentSource)
+
+
+def parse_sources(values: Sequence[str] | str | None) -> list[str] | None:
+    """Validate ``sources`` against :class:`~app.domain.enums.ContentSource`.
+
+    Same contract as :func:`app.services.chunk_kinds.parse_kinds`: a typo is an
+    error, never a filter that silently matches nothing.
+
+    Raises:
+        ValueError: on an unknown source, naming the accepted set.
+    """
+    if values is None:
+        return None
+    raw = [values] if isinstance(values, str) else list(values)
+    wanted = [item.strip().lower() for item in raw if item and item.strip()]
+    if not wanted:
+        return None
+    resolved: list[str] = []
+    unknown: list[str] = []
+    for word in wanted:
+        if word in _SOURCES:
+            if word not in resolved:
+                resolved.append(word)
+        else:
+            unknown.append(word)
+    if unknown:
+        raise ValueError(
+            f"unknown source(s): {', '.join(unknown)}; "
+            f"choose from: {', '.join(sorted(_SOURCES))}"
+        )
+    return resolved
 
 
 @dataclass(slots=True)
@@ -55,16 +92,61 @@ class SemanticSearchService:
         # What the last search was scoped to, for echoing back in a response.
         self.last_scope: dict[str, Any] = {}
 
+    def _scope(
+        self,
+        *,
+        project: str | None,
+        project_papers: int | None,
+        content_kinds: list[str] | None,
+        filters: VectorFilter | None = None,
+        min_score: float | None = None,
+    ) -> dict[str, Any]:
+        """What the last search was actually scoped to.
+
+        Built from the resolved filter rather than from the arguments, so it
+        reports what actually reached the store: a caller must never be told
+        "scoped to 3 papers" when the filter turned out to be unrestricted.
+        """
+        scope: dict[str, Any] = {
+            "project": project,
+            "project_papers": project_papers,
+            "content_kinds": content_kinds or [],
+        }
+        if filters is not None:
+            described = filters.describe()
+            described["content_kinds"] = filters.content_kinds or []
+            scope.update(described)
+        if min_score is not None:
+            scope["min_score"] = min_score
+        return scope
+
     async def paper_ids_for_project(self, project: str) -> list[str]:
         """Paper ids held by a project. Raises on an unknown project name."""
-        from app.db.project_repository import PaperNotFoundError, ProjectRepository
+        from app.db.project_repository import ProjectRepository
 
         async with self._session_factory() as session:
-            repo = ProjectRepository(session)
-            found = await repo.get(project)
-            if found is None:
-                raise PaperNotFoundError(f"no project matching {project!r}")
-            return await repo.paper_ids(found)
+            return await ProjectRepository(session).paper_ids_for(project)
+
+    async def resolve_paper_ids(
+        self, identifiers: Sequence[str], *, strict: bool = False
+    ) -> list[str]:
+        """Map user input onto stored paper ids.
+
+        Accepts arXiv ids, versioned ids and abs URLs, because that is what every
+        surface receives; an internal id passes through unchanged.
+
+        Args:
+            strict: raise on anything unresolved. Off by default so a project
+                intersection can discard papers it does not hold without
+                failing the whole query.
+        """
+        from app.db.project_repository import ProjectRepository
+
+        async with self._session_factory() as session:
+            resolved, unresolved = await ProjectRepository(session).resolve_paper_ids(identifiers)
+        if strict and unresolved:
+            raise LookupError(f"no ingested paper matching: {', '.join(unresolved)}")
+        return resolved
 
     async def search(
         self,
@@ -84,38 +166,82 @@ class SemanticSearchService:
 
         - ``project`` restricts to the papers a project holds, resolved to their
           ids here so that no vector store needs to know the project schema.
-        - ``paper_ids`` restricts to specific papers.
+        - ``paper_ids`` restricts to specific papers. Accepts arXiv ids and URLs,
+          not just internal ids — see :meth:`resolve_paper_ids`.
         - ``content_kinds`` restricts to what the chunks *are* — equations,
           figures, tables, references, abstracts, code or body.
 
         ``project`` and ``paper_ids`` together intersect, which is the useful
         reading: "the equations in the papers of this project".
+
+        Raises:
+            ValueError: a ``content_kinds`` or ``sources`` value is unknown.
+            LookupError: the project does not exist, or no requested paper does.
         """
         if not query.strip():
             return []
+        # Parse before touching the vector store so a typo is a clean 422/2
+        # instead of a search that quietly matched nothing.
+        if content_kinds is not None:
+            content_kinds = parse_kinds(content_kinds)
+        if sources is not None:
+            sources = parse_sources(sources)
+
         if project:
-            scoped = await self.paper_ids_for_project(project)
+            scoped = set(await self.paper_ids_for_project(project))
             if not scoped:
                 # An empty project is not an error, but it must not silently
                 # widen into a corpus-wide search.
-                self.last_scope = {"project": project, "project_papers": 0}
+                self.last_scope = self._scope(
+                    project=project, project_papers=0, content_kinds=content_kinds
+                )
                 return []
-            paper_ids = sorted(set(paper_ids or []) & set(scoped)) if paper_ids else scoped
-        self.last_scope = {
-            "project": project,
-            "project_papers": len(paper_ids or []) if project else None,
-            "content_kinds": content_kinds or [],
-        }
-        vector = await self._embeddings.embed_query(query)
-        # Guard before the store: a wrong-width query vector is a caller bug and
-        # the message is far clearer here than inside a similarity scan.
-        self._check_query_width(vector)
+            # Intersect with any caller-supplied papers *after* they are
+            # resolved, so both spellings refer to the same internal ids. A
+            # project narrows the paper set and never widens it.
+            if paper_ids is None:
+                paper_ids = sorted(scoped)
+            else:
+                asked = set(await self.resolve_paper_ids(paper_ids))
+                paper_ids = sorted(scoped & asked)
+            if not paper_ids:
+                self.last_scope = self._scope(
+                    project=project, project_papers=0, content_kinds=content_kinds
+                )
+                return []
+        elif paper_ids is not None:
+            # Strict: without a project to intersect against, an unresolvable id
+            # can only be a mistake, and a search that silently returns nothing
+            # is indistinguishable from one that found no matching text.
+            paper_ids = await self.resolve_paper_ids(paper_ids, strict=True)
+            if not paper_ids:
+                # Only reachable for an explicitly empty list, which means
+                # "match nothing" — the opposite of "no filter".
+                self.last_scope = self._scope(
+                    project=project, project_papers=0, content_kinds=content_kinds
+                )
+                return []
+
         filters = VectorFilter(
             paper_ids=paper_ids,
             categories=[category] if category else None,
             content_kinds=content_kinds,
             sources=sources,
         )
+        self.last_scope = self._scope(
+            project=project,
+            project_papers=(
+                len(filters.paper_ids or []) if project and filters.paper_ids is not None else None
+            ),
+            content_kinds=content_kinds,
+            filters=filters,
+            min_score=min_score,
+        )
+
+        vector = await self._embeddings.embed_query(query)
+        # Guard before the store: a wrong-width query vector is a caller bug and
+        # the message is far clearer here than inside a similarity scan.
+        self._check_query_width(vector)
         ranked = await self._store.search(
             vector, top_k=top_k, filters=filters, min_score=min_score
         )

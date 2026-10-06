@@ -564,10 +564,22 @@ class TestSemanticSearch:
             embeddings=provider,
             session_factory=get_session_factory(settings.database),
         )
-        assert await service.search("attention", top_k=5, paper_ids=["does-not-exist"]) == []
-        hits = await service.search("attention", top_k=5, paper_ids=[ctx.paper_id])
-        assert hits
-        assert {hit.paper_id for hit in hits} == {ctx.paper_id}
+        # An unresolvable id used to mean "filter on it" and so matched nothing.
+        # Resolution now happens in the service, so a paper id that was never
+        # ingested is an error rather than a silently empty result — a search
+        # returning nothing because an id was wrong is indistinguishable from one
+        # that found no matching text.
+        with pytest.raises(LookupError) as excinfo:
+            await service.search("attention", top_k=5, paper_ids=["does-not-exist"])
+        assert "does-not-exist" in str(excinfo.value)
+
+        # Both spellings reach the same paper: the internal id, and the arXiv id
+        # a caller actually types.
+        by_internal = await service.search("attention", top_k=5, paper_ids=[ctx.paper_id])
+        by_arxiv = await service.search("attention", top_k=5, paper_ids=["1706.03762"])
+        assert by_internal and by_arxiv
+        assert {hit.paper_id for hit in by_internal} == {ctx.paper_id}
+        assert [h.chunk_id for h in by_internal] == [h.chunk_id for h in by_arxiv]
 
 
 class TestQueryToIngestion:

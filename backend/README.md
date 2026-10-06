@@ -123,6 +123,34 @@ fetched and run through the pipeline first (minutes per PDF). Without it the
 command reports exactly which ids it could not resolve instead of importing
 half a list. Re-importing is a no-op.
 
+### Sessions
+
+`paper ask --project X` answers one question and throws the scope away; the next
+one needs the flag again, and there is no way to see what is in scope. Reading a
+list is mostly sequencing, so `paper session` opens the project once:
+
+```console
+$ paper session sheaf-neural-networks
+session ╭──────────────────────────────────────────────────────╮
+        │ Sheaf Neural Networks  bge-large (BAAI/bge-large-en-v1.5)│
+        ╰──────────────────────────────────────────────────────╯
+(sheaf-papers) papers            # the project's papers, unread first
+(sheaf-papers) set -c equations  # restrict later questions
+(sheaf-papers) ask why the connection laplacian
+(sheaf-papers) show 2608.08710   # that paper's chunks
+(sheaf-papers) assets            # figures/tables/equations across the project
+(sheaf-papers) read 2608.08710   # toggle read state
+(sheaf-papers) exit
+```
+
+`set` takes `content=`, `top_k=` and `text=`, in either spelling — `set -c
+equations` and `set content=equations` are the same command. Nothing in a session
+silently widens to the whole corpus; that is one command away with `paper ask`.
+
+A session survives a bad command. An unknown name, a mistyped setting or an
+un-ingested paper prints the reason and leaves the prompt in place — losing your
+place in a reading list because of one typo is the opposite of the point.
+
 ### The citation graph
 
 ```
@@ -180,12 +208,137 @@ Two details the implementation had to get right, both found by running it:
 | `GET` | `/api/v1/papers/{id}/references` | `?direction=references\|cited-by` |
 | `GET` | `/api/v1/references/most-cited` | Corpus papers by incoming citations |
 
-Five MCP tools: `list_projects`, `create_project`, `import_papers_to_project`,
-`list_project_papers`, `list_references`.
+Five of the twenty-four MCP tools cover projects and references — `list_projects`,
+`create_project`, `import_papers_to_project`, `list_project_papers`,
+`list_references` — with `set_paper_read` and `delete_project` for working through
+and cleaning up a list. `list_assets` covers figures, tables and equations (see
+**Tools**).
+
+### Assets
+
+Figures, tables and equations are stored in three tables, so they can be listed
+and filtered rather than scraped out of prose:
+
+```console
+$ paper assets 1706.03762v7 --kind figures   # caption + image URL or blob
+$ paper assets 1706.03762v7 --kind equations --display
+```
+
+`--project` answers the corpus-level question — which papers in this reading list
+have figures at all — instead of paging through each paper:
+
+```console
+$ paper assets --project sheaf-neural-networks
+sheaf-neural-networks · 36 papers with assets
+
+arxiv_id       figures   tables   display eq   inline
+2603.14831        45        3           44      1048
+2409.08036         5       25           90      2466
+```
+
+Equation search is a substring match on the stored LaTeX; `GET /api/v1/equations`
+takes `?q=` plus `?project=` and `?arxiv_id=` for the same scope rules as
+semantic search. For a meaning-based search restricted to formulas, use
+`POST /api/v1/search/semantic` with `"content_kinds": ["equation"]`.
+
+## Content kinds
+
+Every chunk carries a `content_kind`, decided once by the chunker: `body`,
+`abstract`, `figure`, `table`, `equation`, `reference`, `code`. It is stored
+rather than recomputed, so filtering is a column comparison and composes with
+every other search scope.
+
+| Surface | Filter |
+|---|---|
+| CLI | `paper ask "..." --content equations --content tables` (`-C`, repeatable) |
+| CLI | `paper show <id> --content figures` |
+| HTTP | `POST /api/v1/search/semantic` with `"content_kinds": ["equation"]` |
+| HTTP | `GET /api/v1/papers/{id}/chunks?content=equation` |
+| MCP | `ask_paper_corpus(query=…, content=["eqs"])` |
+| MCP | `read_chunks(arxiv_id=…, content=["figure"])` |
+
+Plurals and short aliases are accepted (`equations`, `tables`, `figs`, `refs`,
+`eqs`), and `paper show` prints the kind per chunk. An unknown value is an
+**error on every surface** — CLI exit 2, HTTP 422, `{"ok": false, …}` in MCP —
+because a typo that returned nothing silently is indistinguishable from a corpus
+that holds no equations at all.
+
+In MCP, `read_chunks` returns each chunk's kind as `kind`, and `total_chunks`
+counts only the filtered set.
+
+Chunks stored before the column existed are labeled by `paper kinds`:
+
+```console
+$ paper kinds               # label the chunks that have no kind yet
+$ paper kinds --all         # re-label everything
+$ paper kinds --report      # show the distribution, change nothing
+```
+
+Note what relabeling can and cannot do: it reads the **stored chunk text**, so it
+can fix a mislabel but cannot invent content that was never extracted. Use it
+after switching models or moving between spaces; use `paper ingest --force` when
+the extraction itself has changed.
+
+### Two extraction bugs that made the kinds wrong
+
+Both were found by measuring real arXiv HTML, and both were corpus-level
+correctness bugs rather than cosmetic labels.
+
+- LaTeXML lays every **display equation** out in a three-column
+  `<table class="ltx_equation">`. That reached the chunker as a markdown pipe
+  table, so every display equation in an arXiv paper looked like a *table*. It is
+  now lifted out through the `<math alttext>` LaTeX into real `$$ … $$` display
+  math, and the classifier also recognizes the layout (empty pad cells at both
+  ends, LaTeX between), so corpora ingested earlier are classified correctly too.
+- `figure.ltx_figure` used to be dropped wholesale, which left the corpus with
+  **zero** figure chunks. The figure is now reduced to its caption text; the
+  structured figure record — image URL, page, bounding box — is still
+  extracted separately from the raw HTML.
+
+Measured on 1706.03762v7 (Attention Is All You Need): 5 figure captions and 4
+table captions classify correctly, and 9 display-math blocks are recovered.
+
+The classifier can relabel an existing corpus (`paper kinds --all`), but the
+figure fix changes the **extracted markdown** — a paper ingested before it has no
+figure captions in its stored text to find. Re-ingest with `--force` to pick them
+up:
+
+```bash
+paper ingest 1706.03762v7 --force   # 25 chunks: 3 figure, 3 table, 3 equation
+paper show 1706.03762v7 --content figures
+```
+
+## Scoped search
+
+`paper ask` scopes by project, by paper, by content kind and by source, and the
+scopes compose rather than override each other:
+
+```console
+$ paper ask "how is over-smoothing handled?" --project graph-neural-networks \
+    --content equations --min-score 0.3
+```
+
+Project scope **narrows**: it never widens the result set, so a project with no
+papers returns zero rows instead of the whole corpus, and it intersects with
+`--paper`. The same scope exists as `"project"` on
+`POST /api/v1/search/semantic`, as `project=` on `ask_paper_corpus`, and on
+`GET /api/v1/equations?q=…&project=…&arxiv_id=…`.
+
+`--source` is repeatable and validated against the extraction backends that
+exist: `arxiv_html`, `ar5iv`, `pdf_mineru`, `pdf_pypdf`, `abstract_only`.
+`--min-score` drops hits below a cosine score.
+
+### Any spelling of a paper id
+
+`--paper` and `arxiv_id` resolve a paper from anything that identifies it: a
+bare arXiv id, a versioned id (`2408.05245v1`), an `arXiv:` prefix, an `abs` or
+`pdf` URL, or the internal id. An id that is not ingested raises an error that
+names it — CLI exit 2, HTTP 404, an MCP error — instead of quietly returning
+nothing.
 
 ## The pipeline
 
-Nine independent steps, each with its own failure boundary and timing record
+Ten independent steps, each with its own failure boundary and timing record
 (persisted to `pipeline_step_runs`):
 
 | # | Step | Output |
@@ -195,14 +348,17 @@ Nine independent steps, each with its own failure boundary and timing record
 | 3 | `fetch_content` | HTML blob, else PDF blob → `raw_documents` |
 | 4 | `extract_text` | markdown (`extract_text`) from HTML or MinerU |
 | 5 | `extract_references` | bibliography → `paper_references`, linked where possible |
-| 6 | `chunk_text` | `chunks` rows with heading breadcrumbs |
-| 7 | `embed_chunks` | vectors → `embeddings` rows |
-| 8 | `index_vectors` | vectors → vector store |
-| 9 | `finalize` | stamps `ingested_at` |
+| 6 | `extract_assets` | figures, tables and equations from HTML or MinerU |
+| 7 | `chunk_text` | `chunks` rows with heading breadcrumbs and `content_kind` |
+| 8 | `embed_chunks` | vectors → `embeddings` rows |
+| 9 | `index_vectors` | vectors → vector store |
+| 10 | `finalize` | stamps `ingested_at` |
 
 Every step degrades instead of failing. MinerU unavailable or a PDF unreadable →
 step 4 falls back to `abstract_only` and the run is `partial`. No machine-readable
-bibliography → step 5 records nothing. A paper is never lost.
+bibliography → step 5 records nothing. Asset extraction (step 6) is never fatal
+either, so a paper whose figures cannot be extracted still ingests, just without
+them. A paper is never lost.
 
 ## Quick start
 
@@ -359,24 +515,47 @@ paper mcp --http --port 8080        # streamable HTTP
 | `search_arxiv` | no | ArXiv metadata search (fast, no download) |
 | `get_paper` | no | Canonical metadata for one id/URL |
 | `ingest_paper` | **yes** | Full pipeline: fetch, MinerU, chunk, embed, index |
-| `ask_paper_corpus` | no | Semantic search over everything ingested |
-| `read_chunks` | no | A paper's chunks, by ordinal offset |
+| `ask_paper_corpus` | no | Semantic search, scoped by `project`, `arxiv_id`, `content` |
+| `read_chunks` | no | A paper's chunks by ordinal offset; `content=` filters, each chunk carries `kind` |
 | `read_markdown` | no | The extracted markdown for a whole paper |
 | `list_papers` | no | What is in the local corpus |
 | `list_embedding_spaces` | no | Registered models and their vector counts |
 | `status` | no | Database, vector store, active model, extraction backends |
+| `list_projects` | no | Named collections and their paper counts |
+| `create_project` | **yes** | Create a named reading list |
+| `import_papers_to_project` | **yes** | Add papers to a project, ingesting them first if asked |
+| `list_project_papers` | no | A project's papers, with note and read state |
+| `list_references` | no | A paper's citations (`direction=references\|cited-by`) |
+| `list_assets` | no | Figures/tables/equations, by `arxiv_id` **or** by `project` |
+| `search_equations` | no | Substring search over stored LaTeX; `project`/`arxiv_id` scoped |
+| `list_categories` | no | Every subject category in the corpus, with paper counts |
+| `list_authors` | no | Most prolific authors; pass `name` to resolve one and list their papers |
+| `most_cited_references` | no | Corpus papers ranked by how often the corpus cites them |
+| `list_ingest_runs` | no | Ingestion history with status and failed steps |
+| `set_paper_read` | **yes** | Toggle read state in a project, one paper or all |
+| `delete_project` | **yes** (destructive) | Remove a reading list; the papers are kept |
+| `reembed_space` | **yes** | Embed already-stored chunks into another space (no network) |
+| `chunk_kinds` | **yes** | Report the `content_kind` distribution, or relabel chunks |
 
 Plus the `paper://{arxiv_id}` and `corpus://spaces` resources.
 
-Every tool accepts `space` to pick an embedding model, defaulting to the active
-one, so the assistant can A/B two corpora over the same questions.
+Every CLI command has a tool equivalent, and so does every read-only HTTP route.
+`delete_project` is the only tool annotated `destructive_hint`: the other writes
+are idempotent, because re-ingesting or re-embedding *replaces* rather than
+accumulates. That distinction is what lets a client auto-approve the cheap calls
+and still ask before the one call that loses something.
+
+Only `ingest_paper` and `ask_paper_corpus` accept `space` to pick an embedding
+model, defaulting to the active one, so the assistant can A/B two corpora over
+the same questions. `reembed_space` takes one because that is its whole purpose.
 
 ### Why the annotations matter
 
-`ingest_paper` is the only write, so it is the only tool a client should prompt
+`ingest_paper` is the expensive write, so it is the tool a client should prompt
 for. It is marked `read_only_hint=False` and `idempotent_hint=True` (re-ingest
-replaces rather than duplicates), while everything else is `read_only_hint=True`
-— clients use that to auto-approve the cheap calls.
+replaces rather than duplicates), as are `create_project` and
+`import_papers_to_project` (re-importing is a no-op); everything else is
+`read_only_hint=True` — clients use that to auto-approve the cheap calls.
 
 ### Context-window discipline
 
@@ -405,16 +584,17 @@ models with different dimensions cannot share a column. Rather than commit to
 one model forever, each model gets its own table:
 
 ```
-chunks --+-- embeddings                 default    . text-embedding-3-small . 1536d
-         +-- embeddings__small_384     experiment  . same model truncated    .  384d
-         +-- embeddings__bge_m3        candidate   . BAAI/bge-m3             . 1024d
+chunks --+-- embeddings                 default    . text-embedding-3-small  . 1536d
+         +-- embeddings__small_384     experiment  . same model truncated     .  384d
+         +-- embeddings__bge_m3        candidate   . BAAI/bge-m3              . 1024d
+         +-- embeddings__bge_large     bge         . BAAI/bge-large-en-v1.5   . 1024d
 ```
 
 Chunk text is model-independent, so it exists **once**; only vectors are
-duplicated. Adding a model costs disk and one ingest - no re-embedding, no
-migration of existing rows, and no disruption to the space you already serve.
+duplicated. Adding a model costs disk and one re-embed - no migration of existing
+rows, and no disruption to the space you already serve.
 
-That makes a dimension sweep cheap: build a space at 384, ingest into it
+That makes a dimension sweep cheap: build a space at 384, embed into it
 alongside the 1536 incumbent, and compare them on the same chunks.
 
 ### Using them
@@ -423,11 +603,29 @@ alongside the 1536 incumbent, and compare them on the same chunks.
 paper spaces list                                     # what is registered
 paper spaces add small-384 --model text-embedding-3-small --dims 384
 paper ingest 1706.03762 --space small-384             # add vectors for that model
+paper reembed --space bge-large --dry-run             # list the targets, embed nothing
+paper reembed --space bge-large                       # embed chunks already stored
 paper ask "how does attention work?" --space small-384
 paper spaces activate small-384                       # make it the default
 paper spaces sql small-384                            # DDL, for reviewed migrations
 paper spaces rm small-128 --drop-table                # drop it when done
 ```
+
+`paper reembed` embeds chunks that are **already** ingested into another space:
+no downloads, no re-parsing, **no network at all**. Chunks live in the `chunks`
+table and every space has its own vector table, so a model switch costs minutes
+rather than hours. `--project` and `--paper` scope the work, `--force` re-embeds
+papers the space already has, `--limit` caps it and `--dry-run` only lists the
+targets — without even creating the table.
+
+Verified by blocking every outbound socket except the local database and
+re-embedding one paper into a fresh space: **25 chunks in 0.1s**, no connection
+attempted. `--paper` accepts any id spelling — `1706.03762`, `1706.03762v7`,
+`https://arxiv.org/abs/1706.03762v1` all resolve — because the paper ids are
+resolved rather than string-matched. An id that is not in the corpus is an error
+naming it, not a silent "0 papers"; re-embedding only covers papers whose text
+is already stored, so a paper that was never ingested has to go through
+`paper ingest` (which does reach ArXiv, and reuses the stored HTML when it can).
 
 ```bash
 curl -X POST localhost:8000/api/v1/ingest \
@@ -436,6 +634,12 @@ curl -X POST localhost:8000/api/v1/search/semantic \
      -d '{"query":"...","space":"small-384"}'
 curl localhost:8000/api/v1/embedding-spaces
 ```
+
+### Verified live
+
+Against the `bge-large` space, `paper reembed` embedded **2878 chunks from 54
+papers** in ~29 minutes on CPU (~10 chunks/s) — no paper was downloaded or
+parsed again. A single paper into an empty space takes well under a second.
 
 ### Guards
 
@@ -465,6 +669,10 @@ embedding. Set it to `false` where schema changes must be reviewed, and apply
 export EMBEDDING_PROVIDER=sentence-transformers
 export EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
 
+# Local BGE (1024 dimensions)
+export EMBEDDING_PROVIDER=bge
+export EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+
 # Hosted
 export EMBEDDING_PROVIDER=openai
 export EMBEDDING_MODEL=text-embedding-3-small
@@ -473,6 +681,24 @@ export OPENAI_API_KEY=sk-...
 # Deterministic, dependency-free (dev/CI only — not semantic)
 export EMBEDDING_PROVIDER=hashing
 ```
+
+The `bge` provider applies the model card's query instruction
+(`Represent this sentence for searching relevant passages: `) to **queries
+only**, never to passages — the two sides are embedded differently on purpose.
+Dimensions are read from the loaded model rather than trusted from config.
+
+`hashing` is not a retrieval model, whatever the name suggests: it embeds token
+hashes, so it matches words rather than meaning and cannot answer "which paper
+explains X" for anything but a literal overlap. Measured on the same question
+(`shehir laplacian`, a misspelling of "sheaf laplacian"):
+
+| space | top hit | score |
+|---|---|---|
+| `default` (hashing) | an unrelated paper, all tokens missed | 0.25 |
+| `bge-large` | *Sheaf Neural Networks with Connection Laplacians* | 0.83 |
+
+Keep it for tests and CI, where determinism matters more than meaning. The
+default in `.env.example` is `bge` for that reason.
 
 Every vector stores a `fingerprint` (`provider:model:dimensions`). When the
 fingerprint changes, old vectors are detectable and can be pruned with
@@ -511,11 +737,12 @@ failing at query time.
 | `GET` | `/api/v1/papers/authors` | Prolific authors |
 | `GET` | `/api/v1/papers/authors/{name}` | Every paper by one author |
 | `GET` | `/api/v1/papers/{id}` | Detail + content provenance |
-| `GET` | `/api/v1/papers/{id}/chunks` | Chunk listing |
+| `GET` | `/api/v1/papers/{id}/chunks` | Chunk listing (`?content=` to filter by kind) |
 | `GET` | `/api/v1/papers/{id}/markdown` | Extracted markdown |
 | `POST` | `/api/v1/ingest` | Ingest (`?wait=true` for synchronous) |
 | `GET` | `/api/v1/ingest/runs/{id}` | Per-step run status |
-| `POST` | `/api/v1/search/semantic` | Vector search (pass `space` to pick a model) |
+| `POST` | `/api/v1/search/semantic` | Vector search (`space`, `project`, `content_kinds`) |
+| `GET` | `/api/v1/equations` | Formula search (`?q=`, `?project=`, `?arxiv_id=`) |
 | `GET` | `/api/v1/embedding-spaces` | Registered models |
 | `POST` | `/api/v1/embedding-spaces` | Register a model as its own table |
 | `GET` | `/api/v1/embedding-spaces/{name}` | Detail + DDL |
@@ -689,6 +916,24 @@ HTTP 422, `{"ok": false, ...}` in MCP).
 article versions correctly, so `paper search --id 1706.03762` is the supported
 form.
 
+That is not only a documentation preference — it is the difference between
+`get_paper` working and not. Measured against the live API for the old-style id
+`cond-mat/0404680v1`:
+
+| request | HTTP | entries |
+|---|---|---|
+| `search_query=id:cond-mat/0404680v1` | 200 | 0 |
+| `id_list=…`, no `search_query` | 200 | 1 |
+| both together | 200 | 0 |
+
+All three succeed at the HTTP level. The old-style form is not matched by the
+`id:` field at all, and sending it alongside `id_list` makes ArXiv ignore
+`id_list` — so the failure looked exactly like "this paper does not exist".
+An `id_list` request therefore sends only `id_list`, and `get_paper` falls back
+to the versionless id when a versioned one does not resolve: `cond-mat/0305062v1`
+answers 500 while `cond-mat/0305062` returns the paper, and `solv-int/9712001v2`
+returns nothing because v2 was never published.
+
 Every response echoes the compiled `search_query` back, and
 `GET /api/v1/arxiv/filter-help` lists the fields and operators at runtime.
 
@@ -707,9 +952,10 @@ make check                  # ruff + mypy + pytest
 pytest --cov=app
 ```
 
-471 tests (+23 skipped). ArXiv, the HTML/PDF CDNs, MinerU, the embedding provider
-and the vector store are all faked, so the suite is deterministic and the
-end-to-end pipeline test drives all nine steps against a real SQLite database.
+688 tests (+23 skipped), up from 505; `ruff` and `mypy` are clean. ArXiv, the
+HTML/PDF CDNs, MinerU, the embedding provider and the vector store are all faked,
+so the suite is deterministic and the end-to-end pipeline test drives all ten
+steps against a real SQLite database.
 
 Three suites are worth knowing about because each answers a question the fakes
 cannot:
@@ -760,7 +1006,7 @@ The pipeline is designed to never lose a paper:
 backend/
 ├── app/
 │   ├── api/            # FastAPI routes, schemas, dependencies
-│   ├── clients/        # arxiv/ (Atom), content/ (fetcher, MinerU, html, references)
+│   ├── clients/        # arxiv/ (Atom), content/ (fetcher, MinerU, html, references, assets)
 │   ├── config.py       # typed settings
 │   ├── container.py    # composition root
 │   ├── db/             # models, repositories (paper/project/reference), vector_store/

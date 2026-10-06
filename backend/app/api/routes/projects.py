@@ -433,13 +433,40 @@ async def search_equations(
     q: str = Query(min_length=1, description="Substring of the LaTeX."),
     limit: int = Query(default=20, ge=1, le=100),
     display_only: bool = Query(default=False),
+    project: str | None = Query(default=None, description="Only this project's papers."),
+    arxiv_id: list[str] | None = Query(default=None, description="Only these papers. Repeatable."),
 ) -> dict[str, Any]:
-    """Find formulas whose LaTeX contains a substring, across the whole corpus."""
+    """Find formulas whose LaTeX contains a substring.
+
+    Scoped like semantic search: by ``project``, by ``arxiv_id``, or across the
+    whole corpus. This is a *substring* match on the stored LaTeX, not a
+    semantic one — ``POST /search/semantic`` with ``content_kinds=["equation"]``
+    is the meaning-based equivalent.
+    """
+    paper_ids: list[str] | None = None
+    if project:
+        try:
+            paper_ids = await ProjectRepository(session).paper_ids_for(project)
+        except PaperNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if arxiv_id:
+        papers = PaperRepository(session)
+        wanted = [await papers.get_by_arxiv_id(one) for one in arxiv_id]
+        resolved = [paper.id for paper in wanted if paper is not None]
+        missing = [one for one, paper in zip(arxiv_id, wanted, strict=True) if paper is None]
+        if missing:
+            raise HTTPException(
+                status_code=404, detail=f"paper not ingested: {', '.join(missing)}"
+            )
+        paper_ids = resolved if paper_ids is None else sorted(set(paper_ids) & set(resolved))
+
     rows = await AssetRepository(session).search_equations(
-        q, limit=limit, display_only=display_only
+        q, limit=limit, display_only=display_only, paper_ids=paper_ids
     )
     return {
         "query": q,
+        "project": project,
+        "scope_papers": len(paper_ids) if paper_ids is not None else None,
         "count": len(rows),
         "equations": [
             {

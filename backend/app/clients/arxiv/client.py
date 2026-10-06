@@ -45,7 +45,10 @@ class ArxivClient:
         logger.info(
             "arxiv_search",
             extra={
-                "search_query": params["search_query"],
+                # An id_list request has no `search_query` param — see
+                # build_search_params — so log whichever was actually sent.
+                # `params["search_query"]` raised KeyError here before.
+                "search_query": params.get("search_query", f"id_list={params.get('id_list')}"),
                 "hits": len(page),
                 "total": page.total_results,
             },
@@ -106,18 +109,55 @@ class ArxivClient:
 
     # ----------------------------------------------------------------- by id
     async def get_paper(self, arxiv_id: str) -> PaperMetadata:
-        """Fetch canonical metadata for one paper (any id/version form accepted)."""
+        """Fetch canonical metadata for one paper (any id/version form accepted).
+
+        Falls back to the versionless id when the versioned form does not
+        resolve. Measured cases, all old-style ids where ArXiv is inconsistent:
+
+        - ``cond-mat/0305062v1`` answers HTTP 500; ``cond-mat/0305062`` returns
+          the paper (as v4). A 500 on a document that demonstrably exists is
+          worth one retry, not an error.
+        - ``solv-int/9712001v2`` returns nothing because that version was never
+          published; the versionless id returns v1. Falling back gives the paper,
+          and ``versioned_id`` in the result still reports the real version.
+
+        The retry is only ever *looser*, so it can turn "not found" into "found"
+        and never the reverse.
+        """
         identifier = normalize_arxiv_id(arxiv_id)
+        wanted = arxiv_id if parse_arxiv_id(arxiv_id).version else identifier
+        page = await self._id_page(wanted)
+        if not page and wanted != identifier:
+            logger.info(
+                "arxiv_id_version_fallback",
+                extra={"requested": arxiv_id, "tried": wanted, "fallback": identifier},
+            )
+            page = await self._id_page(identifier)
+        if not page:
+            raise ArxivNotFound(f"no ArXiv entry for {arxiv_id!r}")
+        return page.hits[0].metadata
+
+    async def _id_page(self, one_id: str):  # noqa: ANN202
+        """One `id_list` page, tolerating ArXiv's 500 on some old-style ids."""
         query = SearchQuery(
-            id_list=(arxiv_id if parse_arxiv_id(arxiv_id).version else identifier,),
+            id_list=(one_id,),
             max_results=1,
             sort_by=ArxivSortBy.LAST_UPDATED_DATE,
             sort_order=ArxivSortOrder.DESCENDING,
         )
-        page = await self.search(query)
-        if not page:
-            raise ArxivNotFound(f"no ArXiv entry for {arxiv_id!r}")
-        return page.hits[0].metadata
+        try:
+            return await self.search(query)
+        except HttpError as exc:
+            if exc.status_code != 500:
+                raise
+            # ArXiv serves 500 for `cond-mat/0305062v1` while the versionless
+            # form of the same paper returns 200. Let the caller's fallback
+            # decide rather than reporting a server error as a missing paper.
+            logger.warning(
+                "arxiv_id_500",
+                extra={"requested": one_id, "status": exc.status_code},
+            )
+            return SearchResultPage(hits=(), total_results=0, start=0, items_per_page=0)
 
     async def get_papers(self, arxiv_ids: list[str]) -> list[PaperMetadata]:
         """Batch metadata lookup using the ``id_list`` parameter (chunks of 50)."""

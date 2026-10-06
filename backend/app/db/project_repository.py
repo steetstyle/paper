@@ -178,15 +178,28 @@ class ProjectRepository:
 
     # ------------------------------------------------------------------- read
     async def get(self, identifier: str) -> Project | None:
-        """Look up by slug first, then by exact id or name."""
+        """Look up by slug first, then by exact name, then by internal id.
+
+        The name fallback is what ``paper projects add "My Reading List"``
+        promises, and what every project-scoped search inherits. Case-insensitive
+        on slug *and* name, because people retype names with different casing;
+        the internal id stays exact since it is machine-generated.
+        """
+        wanted = identifier.strip()
         result = await self._session.execute(
-            select(Project).where(Project.slug == identifier.strip().lower()).limit(1)
+            select(Project).where(Project.slug == wanted.lower()).limit(1)
+        )
+        found = result.scalar_one_or_none()
+        if found is not None:
+            return found
+        result = await self._session.execute(
+            select(Project).where(func.lower(Project.name) == wanted.lower()).limit(1)
         )
         found = result.scalar_one_or_none()
         if found is not None:
             return found
         return await self._session.scalar(
-            select(Project).where(Project.id == identifier).limit(1)
+            select(Project).where(Project.id == wanted).limit(1)
         )
 
     async def require(self, identifier: str) -> Project:
@@ -194,6 +207,33 @@ class ProjectRepository:
         if project is None:
             raise PaperNotFoundError(f"no project matching {identifier!r}")
         return project
+
+    async def paper_ids_for(self, identifier: str) -> list[str]:
+        """Paper ids held by the named project. Raises when it does not exist."""
+        project = await self.require(identifier)
+        return await self.paper_ids(project)
+
+    async def link_paper_ids(
+        self, project: Project, identifiers: Sequence[str]
+    ) -> tuple[list[str], list[str]]:
+        """Split identifiers into those the project holds and those it does not.
+
+        ``(in_project, not_in_project)``, each de-duplicated and in the order
+        given. Needed because resolving an arXiv id says only that the *corpus*
+        has it: without the membership check, "mark this paper read" on a paper
+        outside the project updates zero rows and reports success, which reads
+        as "marked" when nothing happened.
+        """
+        resolved, unresolved = await self.resolve_paper_ids(identifiers)
+        if not resolved:
+            return [], list(dict.fromkeys(unresolved))
+        held = set(await self.paper_ids(project))
+        in_project = [pid for pid in resolved if pid in held]
+        outside = [pid for pid in resolved if pid not in held]
+        # An unresolved id is also "not in this project"; report it rather than
+        # swallowing it.
+        outside.extend(unresolved)
+        return in_project, list(dict.fromkeys(outside))
 
     async def list_projects(self, *, include_archived: bool = False) -> list[ProjectInfo]:
         """Every project, newest first, with paper and read counts."""

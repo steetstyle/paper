@@ -31,7 +31,17 @@ class SentenceTransformerProvider(EmbeddingProvider):
             batch_size=batch_size,
             normalize=normalize,
         )
-        self._device = device
+        # CPU unless asked. sentence-transformers moves the model to CUDA whenever
+        # one is visible, which is right for a one-shot script and wrong for a
+        # long-lived server: measured here, every `paper mcp` process pinned
+        # ~1.4 GB of VRAM, so six idle tool processes held 8.8 GB of an 11.6 GB
+        # card and left nothing for bulk work.
+        #
+        # CPU is also the faster choice for the *query* path, which is what these
+        # processes mostly do: a single short embedding is dominated by host-to-
+        # device transfer, not compute. `ST_DEVICE=cuda` is the opt-in for bulk
+        # embedding, where it measured 8.6x faster (86 vs 10 chunks/s).
+        self._device = device or "cpu"
         self._cache_dir = cache_dir
         self._encoder: Any = None
 

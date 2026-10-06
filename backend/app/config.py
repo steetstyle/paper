@@ -130,7 +130,15 @@ class EmbeddingSettings(BaseSettings):
         "One table per space, so two models can coexist.",
     )
 
-    device: str | None = Field(default=None, validation_alias="ST_DEVICE")
+    device: str | None = Field(
+        default=None,
+        validation_alias="ST_DEVICE",
+        description=(
+            "cpu | cuda | cuda:0 | mps. Defaults to cpu: a long-lived server "
+            "process pins the model's worth of VRAM otherwise, and single-query "
+            "latency is CPU-bound anyway. Set ST_DEVICE=cuda for bulk embedding."
+        ),
+    )
     cache_dir: Path = Field(default=Path("./.data/models"), validation_alias="ST_MODEL_CACHE_DIR")
 
     openai_api_key: str | None = Field(default=None, repr=False, validation_alias="OPENAI_API_KEY")

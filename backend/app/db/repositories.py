@@ -600,18 +600,39 @@ class ChunkRepository:
         return rows
 
     async def list_for_paper(
-        self, paper_id: str, *, limit: int | None = None, offset: int = 0
+        self,
+        paper_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+        content_kinds: Sequence[str] | None = None,
     ) -> Sequence[Chunk]:
-        stmt = select(Chunk).where(Chunk.paper_id == paper_id).order_by(Chunk.ordinal)
-        if limit:
+        """One paper's chunks in reading order.
+
+        Args:
+            content_kinds: restrict to these ``content_kind`` values. An empty
+                sequence matches nothing, matching
+                :class:`~app.db.vector_store.base.VectorFilter`.
+        """
+        stmt = select(Chunk).where(Chunk.paper_id == paper_id)
+        if content_kinds is not None:
+            stmt = stmt.where(Chunk.content_kind.in_(list(content_kinds)))
+        stmt = stmt.order_by(Chunk.ordinal)
+        # `is not None`, not truthiness: `limit=0` means "return nothing", and
+        # treating it as "no limit" hands back the whole paper.
+        if limit is not None:
             stmt = stmt.limit(limit).offset(offset)
         result = await self._session.execute(stmt)
         return result.scalars().all()
 
-    async def count(self, paper_id: str | None = None) -> int:
+    async def count(
+        self, paper_id: str | None = None, *, content_kinds: Sequence[str] | None = None
+    ) -> int:
         stmt = select(func.count()).select_from(Chunk)
         if paper_id:
             stmt = stmt.where(Chunk.paper_id == paper_id)
+        if content_kinds is not None:
+            stmt = stmt.where(Chunk.content_kind.in_(list(content_kinds)))
         return int(await self._session.scalar(stmt) or 0)
 
     async def get_many(self, chunk_ids: Sequence[str]) -> Sequence[Chunk]:
@@ -878,6 +899,12 @@ class SemanticSearchRepository:
                         "published_at": paper.published_at.isoformat()
                         if paper and paper.published_at
                         else None,
+                        # The store's own payload first: it is the less
+                        # authoritative of the two. Splatting it after the chunk
+                        # fields would let a stale index-time `content_kind`
+                        # overwrite what the `chunks` row says — which is
+                        # exactly what a re-classification has to be able to fix.
+                        **hit.metadata,
                         "heading": chunk.heading if chunk else None,
                         "section_path": chunk.section_path if chunk else [],
                         "ordinal": chunk.ordinal if chunk else None,
@@ -885,7 +912,6 @@ class SemanticSearchRepository:
                         # So a caller can group results by what they are
                         # without re-reading the text.
                         "content_kind": chunk.content_kind if chunk else None,
-                        **hit.metadata,
                     },
                 }
             )

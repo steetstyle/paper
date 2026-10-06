@@ -46,7 +46,7 @@ from app.domain.models import SearchQuery
 from app.logging import get_logger
 from app.services.chunk_kinds import parse_kinds
 from app.services.ingestion import build_ingestion_service
-from app.services.semantic_search import SemanticSearchService
+from app.services.semantic_search import SemanticSearchService, parse_sources
 
 logger = get_logger(__name__)
 
@@ -486,16 +486,21 @@ async def list_project_papers(
     name="list_assets",
     title="A paper's figures, tables and equations",
     description=(
-        "Extracted non-text content of one paper. Figures and tables carry "
-        "captions and where their image lives; equations carry LaTeX. Inline "
-        "math is stored but omitted by default — a paper has ~3 real equations "
-        "and ~140 inline fragments. Set `include_inline_equations` when hunting "
-        "for a specific symbol."
+        "Extracted non-text content. Figures and tables carry captions and "
+        "where their image lives; equations carry LaTeX. Inline math is stored "
+        "but omitted by default — a paper has ~3 real equations and ~140 inline "
+        "fragments. Set `include_inline_equations` when hunting for a symbol.\n\n"
+        "Pass `arxiv_id` for one paper, or `project` for the whole reading "
+        "list — the project form answers 'which papers here have figures at "
+        "all', which is one query instead of paging through every paper.\n\n"
+        "`kind` is an *asset* type (figures/tables/equations), which is a "
+        "different axis from the `content` filter on ask_paper_corpus."
     ),
     annotations=_ann(**_READS_LOCAL),
 )
 async def list_assets(
-    arxiv_id: str,
+    arxiv_id: str | None = None,
+    project: str | None = None,
     kind: str = "all",
     limit: int = 25,
     include_inline_equations: bool = False,
@@ -503,10 +508,46 @@ async def list_assets(
 ) -> dict[str, Any]:
     """Show a paper's figures, tables and equations."""
     from app.db.asset_repository import AssetRepository  # noqa: PLC0415
+    from app.db.project_repository import PaperNotFoundError, ProjectRepository  # noqa: PLC0415
     from app.db.repositories import PaperRepository  # noqa: PLC0415
+
+    if project and arxiv_id:
+        return _fail("Pass either arxiv_id or project, not both.")
 
     container = _container()
     wanted = {"figures", "tables", "equations"} if kind in {"all", "*"} else {kind}
+
+    if project:
+        async with container.session_factory() as session:
+            projects = ProjectRepository(session)
+            try:
+                found = await projects.require(project)
+            except PaperNotFoundError as exc:
+                return _fail(str(exc))
+            linked = await projects.list_papers(found, limit=max(1, min(limit, 200)))
+            asset_repo = AssetRepository(session)
+            summary = []
+            for linked_paper, _link in linked:
+                counts = await asset_repo.count(linked_paper.id)
+                if counts["figures"] or counts["tables"] or counts["display_equations"]:
+                    summary.append(
+                        {
+                            "arxiv_id": linked_paper.arxiv_id,
+                            "title": linked_paper.title,
+                            **counts,
+                        }
+                    )
+        return _ok(
+            project=found.slug,
+            name=found.name,
+            count=len(summary),
+            papers=summary,
+            hint="Per-paper counts. Call list_assets with arxiv_id for captions and image URLs.",
+        )
+
+    if not arxiv_id:
+        return _fail("Pass either arxiv_id or project.")
+
     async with container.session_factory() as session:
         papers = PaperRepository(session)
         paper = await papers.get_by_arxiv_id(arxiv_id)
@@ -762,6 +803,8 @@ async def ask_paper_corpus(
     project: str | None = None,
     arxiv_id: list[str] | None = None,
     content: list[str] | None = None,
+    source: list[str] | None = None,
+    min_score: float | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     if not query.strip():
@@ -773,6 +816,7 @@ async def ask_paper_corpus(
         # Parsed before the search so a typo is a clear error, not a quiet
         # zero-result answer that reads like "nothing matched".
         kinds = parse_kinds(content)
+        sources = parse_sources(source)
     except SpaceConflictError as exc:
         return _fail(str(exc))
     except ValueError as exc:
@@ -792,6 +836,8 @@ async def ask_paper_corpus(
             paper_ids=list(arxiv_id) if arxiv_id else None,
             content_kinds=kinds,
             project=project,
+            sources=sources,
+            min_score=min_score,
         )
     except ValueError as exc:
         return _fail(str(exc))
@@ -837,7 +883,11 @@ async def ask_paper_corpus(
     title="Read a paper's chunks",
     description=(
         "The stored chunks of an ingested paper, in order, optionally from an "
-        "ordinal offset. Use after ask_paper_corpus to read more of a section."
+        "ordinal offset. Use after ask_paper_corpus to read more of a section.\n\n"
+        "Pass `content` to read only one kind of chunk (same values as "
+        "ask_paper_corpus: body, abstract, figure, table, equation, reference, "
+        "code; repeat the argument for several). `total_chunks` then counts only "
+        "the filtered set, and every chunk carries its `kind`."
     ),
     annotations=_ann(**_READS_LOCAL),
 )
@@ -846,38 +896,46 @@ async def read_chunks(
     offset: int = 0,
     limit: int = 10,
     max_chars: int = 1200,
+    content: list[str] | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     from app.db.repositories import ChunkRepository, PaperRepository  # noqa: PLC0415
-    from app.domain.ids import normalize_arxiv_id  # noqa: PLC0415
 
     try:
-        target_id = normalize_arxiv_id(arxiv_id)
+        kinds = parse_kinds(content)
     except ValueError as exc:
         return _fail(str(exc))
 
     container = _container()
     async with container.session_factory() as session:
-        paper = await PaperRepository(session).get_by_arxiv_id(target_id)
+        # get_by_arxiv_id normalises, so `2401.00001v2` and an abs URL both work.
+        paper = await PaperRepository(session).get_by_arxiv_id(arxiv_id)
         if paper is None:
             return _fail(
-                f"{target_id} is not ingested. Use ingest_paper first, or "
+                f"{arxiv_id} is not ingested. Use ingest_paper first, or "
                 "search_arxiv to find it."
             )
-        total = await ChunkRepository(session).count(paper.id)
-        rows = await ChunkRepository(session).list_for_paper(
-            paper.id, limit=max(1, min(limit, 100)), offset=max(0, offset)
+        chunks = ChunkRepository(session)
+        total = await chunks.count(paper.id, content_kinds=kinds)
+        rows = await chunks.list_for_paper(
+            paper.id,
+            limit=max(1, min(limit, 100)),
+            offset=max(0, offset),
+            content_kinds=kinds,
         )
         return _ok(
             arxiv_id=paper.arxiv_id,
             title=paper.title,
+            content_kinds=kinds or [],
             total_chunks=total,
+            paper_total_chunks=await chunks.count(paper.id),
             returned=len(rows),
             chunks=[
                 {
                     "ordinal": row.ordinal,
                     "section": row.heading,
                     "section_path": list(row.section_path),
+                    "kind": row.content_kind,
                     "tokens": row.token_count,
                     "text": row.text[:max_chars],
                     "truncated": len(row.text) > max_chars,
@@ -1058,6 +1116,14 @@ async def paper_resource(arxiv_id: str) -> str:
     container = _container()
     metadata = await container.arxiv.get_paper(arxiv_id)
     return json.dumps(_paper_dict(metadata), indent=2)
+
+
+# Imported last, for its side effect: `tools_corpus` registers its tools onto
+# `server` and reaches back into this module's helpers at call time. Registering
+# here rather than at the top keeps that cycle one-directional.
+from app.mcp import tools_corpus  # noqa: E402  # isort: skip
+
+tools_corpus.register(server)
 
 
 # ---------------------------------------------------------------------------- entry

@@ -245,9 +245,21 @@ class AssetRepository:
         return list((await self._session.execute(stmt)).scalars().all())
 
     async def search_equations(
-        self, needle: str, *, limit: int = 20, display_only: bool = False
+        self,
+        needle: str,
+        *,
+        limit: int = 20,
+        display_only: bool = False,
+        paper_ids: Sequence[str] | None = None,
     ) -> list[PaperEquation]:
-        """Equations whose LaTeX contains ``needle``, corpus-wide."""
+        """Equations whose LaTeX contains ``needle``.
+
+        Args:
+            paper_ids: restrict to these papers. Empty means "no paper matches",
+                matching :class:`~app.db.vector_store.base.VectorFilter`; the
+                distinction matters because the callers of this endpoint can pass
+                a project whose papers hold no equations at all.
+        """
         pattern = f"%{needle.lower()}%"
         stmt: Select[Any] = (
             select(PaperEquation)
@@ -257,6 +269,8 @@ class AssetRepository:
         )
         if display_only:
             stmt = stmt.where(PaperEquation.is_display.is_(True))
+        if paper_ids is not None:
+            stmt = stmt.where(PaperEquation.paper_id.in_(list(paper_ids)))
         return list((await self._session.execute(stmt)).scalars().all())
 
     async def papers_missing_figures(self, *, limit: int = 50) -> list[Paper]:

@@ -278,17 +278,33 @@ class ReembedService:
         from app.db.project_repository import ProjectRepository  # noqa: PLC0415
 
         async with self._session_factory() as session:
+            repo = ProjectRepository(session)
             if project:
-                repo = ProjectRepository(session)
                 found = await repo.get(project)
                 if found is None:
                     raise LookupError(f"no project matching {project!r}")
                 paper_ids = await repo.paper_ids(found)
-            stmt = select(Paper.id, Paper.arxiv_id)
-            if paper_ids:
-                stmt = stmt.where(Paper.id.in_(paper_ids))
+                if not paper_ids:
+                    # An empty project means "nothing to do", not "everything".
+                    # Falling through would re-embed the whole corpus, which is
+                    # the opposite of what `--project` asked for.
+                    return []
             if arxiv_ids:
-                stmt = stmt.where(Paper.arxiv_id.in_(arxiv_ids))
+                # Resolved, not string-matched. `Paper.arxiv_id` stores the
+                # versionless id, so `Paper.arxiv_id.in_(["1706.03762v7"])`
+                # matched nothing at all and reported "0 papers" with no error —
+                # the same trap `SemanticSearchService` fell into.
+                resolved, unresolved = await repo.resolve_paper_ids(arxiv_ids)
+                if unresolved:
+                    raise LookupError(
+                        f"no ingested paper matching: {', '.join(unresolved)}. "
+                        "Re-embedding only covers papers already in the corpus."
+                    )
+                wanted = set(resolved)
+                paper_ids = sorted(set(paper_ids or []) & wanted) if paper_ids else sorted(wanted)
+            stmt = select(Paper.id, Paper.arxiv_id)
+            if paper_ids is not None:
+                stmt = stmt.where(Paper.id.in_(paper_ids))
             # Deterministic order so a --limit smoke test is reproducible.
             stmt = stmt.order_by(Paper.arxiv_id)
             if limit:

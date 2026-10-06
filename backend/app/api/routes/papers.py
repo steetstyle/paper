@@ -17,7 +17,8 @@ from app.api.schemas import (
     SearchResponse,
 )
 from app.db.models import Chunk, RawDocument
-from app.db.repositories import PaperRepository
+from app.db.repositories import ChunkRepository, PaperRepository
+from app.services.chunk_kinds import parse_kinds
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -127,27 +128,37 @@ async def get_chunks(
     arxiv_id: str,
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    content_kinds: list[str] | None = Query(
+        default=None,
+        alias="content",
+        description="Only these chunk kinds: body, abstract, figure, table, "
+        "equation, reference, code. Repeatable; plurals accepted.",
+    ),
 ) -> dict:
+    try:
+        # Validated here so a typo is a 422 naming the accepted set, rather
+        # than a listing that silently omits everything.
+        kinds = parse_kinds(content_kinds)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     paper = await PaperRepository(session).get_by_arxiv_id(normalize_arxiv_id_or_400(arxiv_id))
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
 
-    total = int(
-        await session.scalar(select(func.count()).select_from(Chunk).where(Chunk.paper_id == paper.id))
-        or 0
+    chunks_repo = ChunkRepository(session)
+    # `total` counts what this request can page through, not the whole paper:
+    # reporting the unfiltered total next to a filtered page is how a client
+    # ends up paging forever.
+    total = await chunks_repo.count(paper.id, content_kinds=kinds)
+    chunks = await chunks_repo.list_for_paper(
+        paper.id, limit=limit, offset=offset, content_kinds=kinds
     )
-    chunks = (
-        await session.execute(
-            select(Chunk)
-            .where(Chunk.paper_id == paper.id)
-            .order_by(Chunk.ordinal)
-            .limit(limit)
-            .offset(offset)
-        )
-    ).scalars().all()
     return {
         "arxiv_id": paper.arxiv_id,
         "total": total,
+        "paper_total": await chunks_repo.count(paper.id),
+        "content_kinds": kinds or [],
         "chunks": [ChunkOut.model_validate(chunk) for chunk in chunks],
     }
 

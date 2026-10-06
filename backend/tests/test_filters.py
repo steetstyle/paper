@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from app.clients.arxiv.filters import SearchRequest, search_query_from
+from app.clients.arxiv.query import build_search_params
 from app.domain.filters import (
     ArxivField,
     ArxivFilter,
@@ -23,7 +24,7 @@ from app.domain.filters import (
     quote_if_needed,
     validate_arxiv_query,
 )
-from app.domain.models import PaperMetadata
+from app.domain.models import PaperMetadata, SearchQuery
 
 
 def metadata(**overrides: Any) -> PaperMetadata:
@@ -597,3 +598,48 @@ class TestPhraseSupport:
         from app.clients.arxiv.filters import search_query_from
 
         assert search_query_from(phrases=["  "], raw="ti:x").filter.compile() == "ti:x"
+
+
+class TestIdListRequestShape:
+    """An id lookup must send `id_list` and nothing else.
+
+    Measured against the live API for the old-style id `cond-mat/0404680v1`:
+
+    =======================================  ======  ======
+    request                                  HTTP    entries
+    =======================================  ======  ======
+    ``search_query=id:cond-mat/0404680v1``    200     0
+    ``id_list`` with no ``search_query``     200     1
+    both together                             200     0
+    =======================================  ======
+
+    All three are HTTP 200. The old-style form is simply not matched by the
+    `id:` field, and sending it alongside `id_list` makes ArXiv ignore
+    `id_list` — so the failure looked exactly like "this paper does not exist".
+    """
+
+    def test_id_list_is_the_only_parameter(self) -> None:
+        params = build_search_params(SearchQuery(id_list=("cond-mat/0404680v1",)))
+        assert params["id_list"] == "cond-mat/0404680v1"
+        assert "search_query" not in params
+        # ArXiv answers sortBy alongside id_list with a 500.
+        assert "sortBy" not in params
+        assert "sortOrder" not in params
+
+    def test_several_ids_are_comma_joined(self) -> None:
+        params = build_search_params(
+            SearchQuery(id_list=("cond-mat/0404680v1", "1706.03762v7"))
+        )
+        assert params["id_list"] == "cond-mat/0404680v1,1706.03762v7"
+
+    def test_an_ordinary_query_is_unchanged(self) -> None:
+        params = build_search_params(SearchQuery(title_terms=("transformer",)))
+        assert params["search_query"] == "ti:transformer"
+        assert "id_list" not in params
+        assert "sortBy" in params
+
+    def test_id_list_never_reaches_the_search_query_string(self) -> None:
+        """`id:` in a search_query silently matches nothing on old-style ids."""
+        params = build_search_params(SearchQuery(id_list=("cond-mat/0404680v1",)))
+        assert "id:" not in str(params.get("search_query", ""))
+
