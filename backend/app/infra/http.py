@@ -23,11 +23,31 @@ from app.logging import get_logger
 logger = get_logger(__name__)
 
 # Transient failures worth retrying; everything else surfaces immediately.
-RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 522, 524})
+#: Statuses worth trying again on a short exponential backoff.
+#:
+#: **429 is deliberately not here.** A 429 is not a hiccup, it is the far end
+#: saying it wants fewer requests, and arXiv sends no ``Retry-After`` to say how
+#: long for — so a retry has to guess. The guess this client used to make cost four
+#: attempts over ~11s of waiting (``wait_exponential(multiplier=1.5)`` →
+# 1.5 + 3 + 6.75) during which arXiv was still saying *slow down*, which is the
+#: one thing that makes a rate limit last longer. Measured on a session that
+#: fetched ten ids: the first two answered, the next eight each burned 12.3s to
+#: arrive at the same 429.
+#:
+#: Failing fast and saying so leaves the caller to choose, which is the only party
+#: that knows when it is ready.
+RETRYABLE_STATUS = frozenset({408, 425, 500, 502, 503, 504, 520, 522, 524})
 
 
 class HttpError(RuntimeError):
-    """Non-retryable HTTP failure."""
+    """An HTTP failure.
+
+    Retryability is a property of the status, not of this class: see
+    :data:`RETRYABLE_STATUS` and :meth:`is_retryable`. This docstring used to say
+    "Non-retryable HTTP failure" outright, which contradicted the 429 in that set
+    — the docstring was the one that was wrong, and it is worth saying so here
+    because the two are easy to mistake for each other again.
+    """
 
     def __init__(self, message: str, *, status_code: int | None = None, url: str | None = None):
         super().__init__(message)

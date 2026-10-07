@@ -71,11 +71,26 @@ Corpus search uses an *embedding space* (one model = one table). Call
 
 # Tool annotations: cheap calls are read-only, ingestion is a write but safe to
 # retry because re-ingesting replaces rather than duplicates.
+#
+# `open_world_hint` is the one that matters most and the easiest to get wrong. MCP
+# clients use it to decide whether a call can run without asking the person: false
+# means "touches nothing outside this process", which is a licence to auto-approve.
+# Every tool that reaches arxiv.org therefore says true, whether it writes
+# (`ingest_paper`) or only reads (`search_arxiv`). Claiming otherwise is not a
+# cosmetic slip — it is a promise to the client about what will happen on the
+# network, made on the user's behalf without asking them.
 _READ_ONLY_REMOTE = {"read_only_hint": True, "open_world_hint": True, "destructive_hint": False}
 _READS_LOCAL = {"read_only_hint": True, "open_world_hint": False, "destructive_hint": False}
 _WRITES_IDEMPOTENT = {
     "read_only_hint": False,
     "open_world_hint": False,
+    "destructive_hint": False,
+    "idempotent_hint": True,
+}
+#: Writes that also download from arxiv.org.
+_WRITES_IDEMPOTENT_REMOTE = {
+    "read_only_hint": False,
+    "open_world_hint": True,
     "destructive_hint": False,
     "idempotent_hint": True,
 }
@@ -256,7 +271,7 @@ async def _space_rows(container: Container) -> list[dict[str, Any]]:
         "same query as writing the prefix by hand. Use this to discover papers, "
         "then ingest the promising ones."
     ),
-    annotations=_ann(**_READS_LOCAL),
+    annotations=_ann(**_READ_ONLY_REMOTE),
 )
 async def search_arxiv(
     query: str | None = None,
@@ -403,7 +418,7 @@ async def create_project(
         "`ingest=true` to fetch and ingest anything not already in the corpus — "
         "that is slow (minutes per PDF) and is the only write this does."
     ),
-    annotations=_ann(**_WRITES_IDEMPOTENT),
+    annotations=_ann(**_WRITES_IDEMPOTENT_REMOTE),
 )
 async def import_papers_to_project(
     project: str,
@@ -721,7 +736,7 @@ async def list_references(
         "(1706.03762, 1706.03762v5, arXiv:1706.03762). Metadata only: does not "
         "download or ingest."
     ),
-    annotations=_ann(**_READS_LOCAL),
+    annotations=_ann(**_READ_ONLY_REMOTE),
 )
 async def get_paper(
     arxiv_id: str,
@@ -748,7 +763,7 @@ async def get_paper(
         "Pass `query` instead of `arxiv_id` to ingest the top N hits of a search.\n\n"
         f"`device` applies to this ingest only: {DEVICE_HELP}"
     ),
-    annotations=_ann(**_WRITES_IDEMPOTENT),
+    annotations=_ann(**_WRITES_IDEMPOTENT_REMOTE),
 )
 async def ingest_paper(
     arxiv_id: str | None = None,

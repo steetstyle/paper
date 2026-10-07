@@ -181,7 +181,15 @@ class ArxivClient:
             )
         except HttpError as exc:
             if exc.status_code == 429:
-                raise ArxivRateLimited("ArXiv rate limit hit (429)") from exc
+                # Actionable because it is terminal: the client does not wait and
+                # retry on a rate limit, so this is the caller's cue rather than a
+                # step on the way to an answer. arXiv sends no Retry-After, so it
+                # cannot say how long — only that now is too soon.
+                raise ArxivRateLimited(
+                    "arXiv is rate limiting this client (HTTP 429). It sends no "
+                    "Retry-After, so there is no correct time to retry — wait a "
+                    "little and ask again. Requests are already spaced 3s apart."
+                ) from exc
             raise
         payload = response.content
         if not payload.strip():
