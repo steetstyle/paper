@@ -583,7 +583,64 @@ An arXiv paper ingested from HTML is the other kind of absence and gets the othe
 answer: an HTML page has no pages to point at, so there is nothing to navigate to
 and the fix is to ingest the PDF.
 
+A third kind is the filter's own doing, and it is the one worth naming. `--level`
+keeps `level <= n`, so on the 13-page slice of *Superconductivity* this corpus
+holds — a window onto pages 40–52 of a 578-page book, which opens at section 2.4 —
+there is no chapter heading anywhere, and `-L 1` finds nothing:
+
+```
+$ paper outline superconductivity -L 1
+no sections at level 1 or shallower — this document has 7, the shallowest at level 2. Try --level 2.
+```
+
+Calling that "no structure recorded" would send the reader looking for a fault in a
+document that has seven sections. It is the shallowest level present that is worth
+naming, not the deepest: `--level` keeps everything at or above it, so suggesting
+the deepest would move the reader away from the answer.
+
 All four read, so all four work under `--read-only`.
+
+### What is not a section, and the two rules that were wrong first
+
+`paper outline 1211.4482v1` once answered with fourteen rows:
+
+```
+Title: Phononics in Low-Dimensions: Engineering Phonons in Nanostructures and Graphene
+Submission history                    References & Citations
+Access Paper:                         BibTeX formatted citation
+Current browse context:               Bookmark
+Bibliographic and Citation Tools      Demos
+Recommenders and Search Tools         arXivLabs: experimental projects
+```
+
+Every one of those is arXiv's own page describing the paper, not the paper
+describing itself. The source was `ar5iv`, which served the abstract page instead of
+a rendering of the text, and the pipeline read its headings as document structure.
+Across 88 documents those outweighed the 322 genuine sections sixteen to one, and
+`paper show` cheerfully announced `sections: 14` for a paper with none.
+
+Two rules were tried and both **destroyed real structure**, which is the worse
+error, so both are recorded here rather than quietly replaced:
+
+* **A section must have a page.** Throws out every genuine section of an
+  HTML-ingested paper, because an HTML page has no pages. Kept one survivor set as
+  evidence: 85 sections, 85 numbered, 0 unnumbered — which reads like a clean
+  discriminator and is not.
+* **A section must be numbered.** Then `II.1 The Assortative Skeleton Network`,
+  `Results` and `Discussion` all went, because plenty of real headings are
+  unnumbered names and plenty are numbered with Roman numerals.
+
+What is left: a heading is kept if it **can be pointed at on a page**, and dropped
+only if it has no page *and* is recognisable page furniture. Measured against the
+real headings — 14 of 14 chrome dropped, 13 of 13 real headings kept, with
+`References & Citations` dropped and `References` kept. A blocklist, deliberately:
+an unknown future heading is an extra row in a table of contents, while a deleted
+one is structure the reader cannot find.
+
+`paper sections` reports what would go and which documents it would happen to, and
+`--apply` is what changes anything — the same report-then-apply shape as
+`paper runs --reap`. Chunks are never deleted; a chunk that loses its navigation
+label keeps its text.
 
 ## Interrupted ingestion
 
@@ -1472,14 +1529,10 @@ make check                  # ruff + mypy + pytest
 pytest --cov=app
 ```
 
-1092 tests pass (+23 skipped), up from 505; `ruff` and `mypy` are clean. ArXiv, the
+1100 tests pass (+23 skipped), up from 505; `ruff` and `mypy` are clean. ArXiv, the
 HTML/PDF CDNs, MinerU, the embedding provider and the vector store are all faked,
 so the suite is deterministic and the end-to-end pipeline test drives all eleven
-steps against a real SQLite database. Five more fail right now, all of them
-outside the section commands: three in `test_documents.py` on the
-markdown-is-the-spine cases and two in `test_scope_search.py` on the MCP `kind`
-field — work in flight elsewhere in the tree, reproduced without this section's
-suite.
+steps against a real SQLite database.
 
 Seven suites are worth knowing about — six answer a question the fakes cannot,
 and the last one answers a question only a rendered terminal can:

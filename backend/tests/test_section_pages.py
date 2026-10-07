@@ -211,20 +211,29 @@ class TestTheStepRefusesHtmlEntirely:
 
 
 class TestOutlineSaysWhichReason:
-    """The two reasons need saying separately.
+    """Three reasons for an empty outline, and none of them substitutes for another.
 
     "No bookmarks" sent a reader hunting for a PDF that was never downloaded, when
     the real answer was that the document came from an HTML rendering and an HTML
-    page has no pages to point at.
+    page has no pages to point at. Then `--level 1` on a document whose shallowest
+    section is at level 2 said "no structure recorded" — for a document that has
+    seven of them. That one sends the reader looking for a fault that is not there,
+    so it gets its own message and its own test.
     """
 
     @staticmethod
-    def _outline(doc_key: str, contents_kinds: list[str]) -> str:
+    def _outline(
+        doc_key: str,
+        contents_kinds: list[str],
+        *,
+        sections: list[tuple[str, int]] = (),
+        args: tuple[str, ...] = (),
+    ) -> str:
         from click.testing import CliRunner  # noqa: PLC0415
         from typer.main import get_command  # noqa: PLC0415
 
         from app.cli import app  # noqa: PLC0415
-        from app.db.models import RawDocument  # noqa: PLC0415
+        from app.db.models import DocumentSection, RawDocument  # noqa: PLC0415
         from app.db.session import get_session_factory  # noqa: PLC0415
 
         async def seed() -> None:
@@ -252,12 +261,26 @@ class TestOutlineSaysWhichReason:
                         for index, kind in enumerate(contents_kinds)
                     ]
                 )
+                session.add_all(
+                    [
+                        DocumentSection(
+                            paper_id=paper.id,
+                            ordinal=index,
+                            title=title,
+                            level=level,
+                            page_start=10 + index,
+                            page_end=10 + index,
+                            source="outline",
+                        )
+                        for index, (title, level) in enumerate(sections, start=1)
+                    ]
+                )
                 await session.commit()
 
         import anyio  # noqa: PLC0415
 
         anyio.run(seed)
-        result = CliRunner().invoke(get_command(app), ["outline", doc_key])
+        result = CliRunner().invoke(get_command(app), ["outline", doc_key, *args])
         return result.output
 
     def test_an_html_document_is_told_why(self) -> None:
@@ -270,3 +293,41 @@ class TestOutlineSaysWhichReason:
         text = self._outline("pdf-only", ["pdf"]).lower()
         assert "no structure recorded" in text
         assert "bookmarks" in text
+
+    def test_a_level_filter_is_not_reported_as_a_missing_structure(self) -> None:
+        """The real case: a 13-page slice of a 578-page book, which starts at
+        section 2.4 and so has no chapter heading at all."""
+        text = self._outline(
+            "slice",
+            ["pdf"],
+            sections=[("2.4 Thermodynamic quantities", 2), ("2.5 Finite number", 3)],
+            args=("-L", "1"),
+        ).lower()
+        assert "no sections at level 1 or shallower" in text
+        # Not the other message: the document does have structure.
+        assert "no structure recorded" not in text
+        # Actionable: names the level to actually ask for.
+        assert "--level 2" in text
+
+    def test_the_shallowest_level_is_the_one_named(self) -> None:
+        """`--level` keeps `level <= n`, so the level to suggest is the shallowest
+        one present — reporting the deepest would send the reader further away."""
+        text = self._outline(
+            "deep",
+            ["pdf"],
+            sections=[("2.4 A", 2), ("2.4.1 B", 3), ("2.4.1.1 C", 4)],
+            args=("-L", "1"),
+        )
+        assert "--level 2" in text
+        assert "--level 4" not in text
+
+    def test_asking_for_a_level_that_exists_prints_it(self) -> None:
+        """The guard above must not fire when there is something to show."""
+        text = self._outline(
+            "shallow",
+            ["pdf"],
+            sections=[("1 Overview", 1), ("2 Middle", 2)],
+            args=("-L", "1"),
+        )
+        assert "1 Overview" in text
+        assert "2 Middle" not in text

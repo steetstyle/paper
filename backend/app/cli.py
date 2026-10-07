@@ -1938,7 +1938,13 @@ def sections_cmd(
             if show or not prune:
                 affected = await documents_with_unplaceable_sections(session)
                 if not affected:
-                    console.print("[green]every section has a page[/green]")
+                    # Not "every section has a page": a paper ingested from an
+                    # HTML rendering has real sections with no page, and saying
+                    # otherwise would describe a state the corpus is not in.
+                    console.print(
+                        "[green]no page furniture found[/green] — every stored "
+                        "section is either on a page or recognisable as structure"
+                    )
                     return 0
                 table = Table(box=None, pad_edge=False)
                 for column, style in (("document", "bold"), ("kind", "dim"), ("junk", "red")):
@@ -2111,22 +2117,34 @@ def outline(
                 paper.id, max_level=max_level
             )
             if not rows:
-                # The two reasons need saying separately. "No bookmarks" sent a
-                # reader looking for a PDF that was never downloaded, when the real
-                # answer is that this document was ingested from HTML and an HTML
-                # page has no pages to point at.
+                # Three reasons, and they are not interchangeable: telling a reader
+                # a document has no structure when it has seven sections and the
+                # caller asked for level 1 sends them looking for a fault that is
+                # not there.
+                unfiltered = await SectionRepository(session).list_for_paper(paper.id)
                 from_html = not any(doc.kind == "pdf" for doc in paper.contents)
-                console.print(
-                    "[yellow]no structure recorded[/yellow] — "
-                    + (
-                        "this document was ingested from an HTML rendering, which "
-                        "has no pages, so there is nothing to navigate to. "
-                        "Ingest the PDF for a table of contents."
-                        if from_html
-                        else "this document has neither PDF bookmarks nor headings "
-                        "the extraction could read."
+                if unfiltered:
+                    # `--level` keeps `level <= n`, so what is missing is a *shallower*
+                    # level: the useful number is the shallowest one present, not
+                    # the deepest.
+                    shallowest = min(row.level for row in unfiltered)
+                    console.print(
+                        f"[yellow]no sections at level {max_level} or shallower[/yellow]"
+                        f" — this document has {len(unfiltered)}, the shallowest at"
+                        f" level {shallowest}. Try --level {shallowest}."
                     )
-                )
+                else:
+                    console.print(
+                        "[yellow]no structure recorded[/yellow] — "
+                        + (
+                            "this document was ingested from an HTML rendering, which "
+                            "has no pages, so there is nothing to navigate to. "
+                            "Ingest the PDF for a table of contents."
+                            if from_html
+                            else "this document has neither PDF bookmarks nor headings "
+                            "the extraction could read."
+                        )
+                    )
                 return 1
 
             table = Table(box=None, pad_edge=False)
