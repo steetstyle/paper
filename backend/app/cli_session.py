@@ -131,7 +131,7 @@ async def _cmd_papers(state: SessionState, args: str) -> None:
         return
     _print_project_papers(rows, title=f"{state.project} ({len(rows)} shown)")
     for paper, _link in rows:
-        state.papers_seen.add(paper.arxiv_id)
+        state.papers_seen.add(paper.display_id)
 
 
 async def _cmd_ask(state: SessionState, question: str) -> None:
@@ -197,7 +197,7 @@ async def _cmd_show(state: SessionState, args: str) -> None:
         console.print("[yellow]show which paper? try `papers`[/yellow]")
         return
     async with get_session_factory()() as session:
-        paper = await PaperRepository(session).get_by_arxiv_id(target)
+        paper = await PaperRepository(session).resolve(target)
         if paper is None:
             console.print(f"[red]{target} is not ingested[/red]")
             return

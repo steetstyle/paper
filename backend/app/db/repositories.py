@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -19,6 +19,7 @@ from app.db.models import (
 from app.db.models import (
     Category,
     Chunk,
+    DocumentSection,
     IngestionRun,
     Paper,
     PaperAuthor,
@@ -83,14 +84,18 @@ class PaperRepository:
         return self._session
 
     async def upsert(self, metadata: PaperMetadata) -> Paper:
-        """Insert or refresh a paper row from ArXiv metadata.
+        """Insert or refresh a row from source metadata.
 
-        Authors and categories are written to their own tables via
-        :meth:`_sync_authors` / :meth:`_sync_categories`, which is why they are
-        absent from the column dict below.
+        Keyed on ``doc_key`` rather than on ``arxiv_id``: a paper's key is its
+        arXiv id, a local file's is a slug, and both go through here. Authors and
+        categories are written to their own tables via :meth:`_sync_authors` /
+        :meth:`_sync_categories`, which is why they are absent from the column
+        dict below.
         """
-        existing = await self.get_by_arxiv_id(metadata.arxiv_id)
+        existing = await self._find_existing(metadata)
         values: dict[str, Any] = {
+            "doc_key": metadata.doc_key,
+            "kind": metadata.kind,
             "arxiv_id": metadata.arxiv_id,
             "versioned_id": metadata.versioned_id,
             "version": metadata.version,
@@ -106,6 +111,8 @@ class PaperRepository:
             "pdf_url": metadata.pdf_url,
             "html_url": metadata.html_url,
             "raw_entry": metadata.raw or None,
+            "file_sha256": metadata.file_sha256,
+            "page_count": metadata.page_count,
             "updated_at": utcnow(),
         }
         if existing is None:
@@ -425,8 +432,87 @@ class PaperRepository:
     async def get(self, paper_id: str) -> Paper | None:
         return await self._session.get(Paper, paper_id)
 
+    async def _find_existing(self, metadata: PaperMetadata) -> Paper | None:
+        """The row this metadata belongs to, if it is already in the corpus.
+
+        Looked up by ``doc_key`` first, because that is the universal handle and
+        the one column every row has. Looking it up by ``arxiv_id`` alone looks
+        equivalent and is not: a local document has no arXiv id, so the lookup
+        returned nothing and the upsert fell through to an INSERT — which failed
+        on the ``doc_key`` unique constraint the moment the same file was
+        ingested twice with ``--force``. Found the hard way, on the second ingest
+        of a book, as a ``PendingRollbackError`` wrapping the real violation.
+        """
+        found = await self.get_by_doc_key(metadata.doc_key)
+        if found is not None:
+            return found
+        if metadata.arxiv_id:
+            return await self.get_by_arxiv_id(metadata.arxiv_id)
+        return None
+
+    async def get_by_doc_key(self, doc_key: str) -> Paper | None:
+        """Find a row by its universal handle, exactly as stored."""
+        result = await self._session.execute(
+            select(Paper).where(Paper.doc_key == doc_key).limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def resolve(self, identifier: str) -> Paper | None:
+        """Find a row by anything that names it: a doc_key, an arXiv id or an id.
+
+        The single lookup callers should use, because an ingest argument, a
+        project membership or a URL path is any of the three. ``get`` stays the
+        strict internal-id read and ``get_by_arxiv_id`` the strict arXiv read, so
+        code that means something specific can still say so.
+        """
+        wanted = identifier.strip()
+        if not wanted:
+            return None
+        result = await self._session.execute(
+            select(Paper).where(Paper.doc_key == wanted).limit(1)
+        )
+        found = result.scalar_one_or_none()
+        if found is not None:
+            return found
+        found = await self.get_by_arxiv_id(wanted)
+        if found is not None:
+            return found
+        return await self.get(wanted)
+
+    async def list_documents(
+        self, *, kind: str | None = None, limit: int = 100
+    ) -> list[Paper]:
+        """The local files in the corpus, newest first.
+
+        Separate from the arXiv listing because a caller asking "what books do I
+        have" should not have to know that papers and documents share a table.
+        """
+        stmt = select(Paper).where(Paper.arxiv_id.is_(None))
+        if kind:
+            stmt = stmt.where(Paper.kind == kind)
+        result = await self._session.execute(
+            stmt.order_by(Paper.ingested_at.desc().nullslast()).limit(limit)
+        )
+        return list(result.scalars().unique().all())
+
+    async def get_by_file_sha256(self, sha256: str) -> Paper | None:
+        """Find a document by the hash of its source file.
+
+        The dedupe check behind "this book is already in the corpus". Deliberately
+        a method rather than a unique index: the same file may be ingested twice
+        on purpose (after a failed run, or as a second copy under another name),
+        and a constraint would make ``--force`` impossible.
+        """
+        result = await self._session.execute(
+            select(Paper).where(Paper.file_sha256 == sha256).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_arxiv_id(self, arxiv_id: str) -> Paper | None:
-        """Find a paper by any spelling of its arXiv id.
+        """Find a *paper* by any spelling of its arXiv id.
+
+        Returns None for anything that is not an arXiv paper — a local document
+        has no arXiv id, and reporting it here would be a lie.
 
         Normalisation lives here rather than at each call site because the
         column stores the *versionless* id while people type every other form.
@@ -521,17 +607,36 @@ class RawDocumentRepository:
         size_bytes: int,
         sha256: str,
         source_url: str = "",
+        page_start: int | None = None,
+        page_end: int | None = None,
         meta: dict[str, Any] | None = None,
     ) -> RawDocument:
         kind_value = str(kind)
+        # `page_start` is part of the identity, matching the table's unique key:
+        # the same book ingested as 1-200 and then 201-400 is two sources, not
+        # one source seen twice, and returning the first for the second would
+        # make the second range a silent no-op.
         existing = await self._session.scalar(
             select(RawDocument).where(
                 RawDocument.paper_id == paper_id,
                 RawDocument.kind == kind_value,
                 RawDocument.sha256 == sha256,
+                RawDocument.page_start.is_(page_start)
+                if page_start is None
+                else RawDocument.page_start == page_start,
             )
         )
         if existing is not None:
+            # The row is returned, but its metadata is refreshed. Skipping the
+            # update loses facts that are derived rather than content-addressed:
+            # the block list written alongside the markdown was being dropped on
+            # every re-ingest of an identical document, because the markdown hash
+            # matched the existing row and the early return discarded the new
+            # meta. Content-addressed fields need no rewrite — they cannot differ
+            # for the same hash — but `meta` can gain keys between runs.
+            if meta and (existing.meta or {}) != meta:
+                existing.meta = {**(existing.meta or {}), **meta}
+                await self._session.flush()
             return existing
         document = RawDocument(
             paper_id=paper_id,
@@ -541,6 +646,8 @@ class RawDocumentRepository:
             size_bytes=size_bytes,
             sha256=sha256,
             source_url=source_url,
+            page_start=page_start,
+            page_end=page_end,
             meta=meta or {},
         )
         self._session.add(document)
@@ -564,6 +671,77 @@ class RawDocumentRepository:
             )
         )
         return bool(count)
+
+
+class SectionRepository:
+    """A document's own structure: chapters, sections, and the pages they span."""
+
+    def __init__(self, session: Any) -> None:
+        self._session = session
+
+    async def replace_for_paper(self, paper_id: str, sections: Sequence[Any]) -> list[DocumentSection]:
+        """Delete-then-insert so ordinals stay dense and deterministic."""
+        await self._session.execute(
+            delete(DocumentSection).where(DocumentSection.paper_id == paper_id)
+        )
+        rows = [
+            DocumentSection(
+                paper_id=paper_id,
+                ordinal=section.ordinal,
+                title=section.title,
+                level=section.level,
+                page_start=section.page_start,
+                page_end=section.page_end,
+                source=section.source,
+            )
+            for section in sections
+        ]
+        self._session.add_all(rows)
+        await self._session.flush()
+        return rows
+
+    async def list_for_section(
+        self, paper_id: str, ordinal: int
+    ) -> list[Chunk]:
+        """The chunks of one section, in document order.
+
+        Section content is the chunks that point at it, not the pages it spans.
+        The two differ and the difference matters: a section can span ten pages of
+        which only four produced text, and printing the page range would promise
+        material the corpus does not hold.
+        """
+        result = await self._session.execute(
+            select(Chunk)
+            .where(Chunk.paper_id == paper_id, Chunk.section_ordinal == ordinal)
+            .order_by(Chunk.ordinal)
+        )
+        return list(result.scalars().all())
+
+    async def count_chunks_in_sections(
+        self, paper_id: str, ordinals: Sequence[int]
+    ) -> dict[int, int]:
+        """How many chunks each of several sections holds, in one query.
+
+        For a table of contents with a chunk column: N sections means N queries
+        otherwise, and the number is on every row.
+        """
+        if not ordinals:
+            return {}
+        result = await self._session.execute(
+            select(Chunk.section_ordinal, func.count())
+            .where(Chunk.paper_id == paper_id, Chunk.section_ordinal.in_(list(ordinals)))
+            .group_by(Chunk.section_ordinal)
+        )
+        return {ordinal: int(count) for ordinal, count in result.all()}
+
+    async def list_for_paper(
+        self, paper_id: str, *, max_level: int | None = None
+    ) -> Sequence[DocumentSection]:
+        stmt = select(DocumentSection).where(DocumentSection.paper_id == paper_id)
+        if max_level is not None:
+            stmt = stmt.where(DocumentSection.level <= max_level)
+        result = await self._session.execute(stmt.order_by(DocumentSection.ordinal))
+        return result.scalars().all()
 
 
 class ChunkRepository:
@@ -592,12 +770,55 @@ class ChunkRepository:
                 content_hash=chunk.content_hash,
                 source=str(chunk.source),
                 content_kind=str(chunk.kind),
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                section_ordinal=chunk.section_ordinal,
             )
             for chunk in chunks
         ]
         self._session.add_all(rows)
         await self._session.flush()
         return rows
+
+    async def assign_sections(
+        self, chunks: Sequence[Chunk], sections: Sequence[DocumentSection]
+    ) -> int:
+        """Point each chunk at the section its page falls inside.
+
+        Matched on page, not on the chunk's text: a section is a page range, and
+        the text of a chunk rarely starts where the section does. The *tightest*
+        containing section wins, so a subsection is preferred over its chapter —
+        which is what makes "show me only this subsection" mean what it says.
+
+        Chunks with no page, and pages covered by no section, are left unset
+        rather than given a default: a wrong section is worse than none, because
+        a filter that quietly excludes things looks like a filter that found
+        nothing.
+        """
+        if not sections or not chunks:
+            return 0
+        usable = [s for s in sections if s.page_start is not None]
+        if not usable:
+            return 0
+        # Sorted widest-first so the first containing match is the tightest.
+        usable.sort(key=lambda s: (s.page_start or 0, -(s.level or 1)))
+        starts = [s.page_start or 0 for s in usable]
+
+        import bisect  # noqa: PLC0415 - only needed here
+
+        assigned = 0
+        for chunk in chunks:
+            if chunk.page_start is None:
+                continue
+            index = bisect.bisect_right(starts, chunk.page_start) - 1
+            for candidate in reversed(usable[: index + 1]):
+                end = candidate.page_end
+                if end is None or chunk.page_start <= end:
+                    chunk.section_ordinal = candidate.ordinal
+                    assigned += 1
+                    break
+        await self._session.flush()
+        return assigned
 
     async def list_for_paper(
         self,
@@ -761,6 +982,7 @@ class RunRepository:
         self,
         *,
         arxiv_id: str | None = None,
+        doc_key: str | None = None,
         requested_by: str = "api",
         trigger: str = "manual",
         prefer_html: bool = True,
@@ -768,6 +990,9 @@ class RunRepository:
     ) -> IngestionRun:
         run = IngestionRun(
             arxiv_id=arxiv_id,
+            # A run of a local file has no arXiv id, and `doc_key` is what makes
+            # it findable by the same argument an ingest takes.
+            doc_key=doc_key,
             requested_by=requested_by,
             trigger=trigger,
             prefer_html=prefer_html,
@@ -850,6 +1075,20 @@ class RunRepository:
         await self._session.flush()
         return step
 
+    async def latest_for_target(self, target: str) -> IngestionRun | None:
+        """The most recent run for an arXiv id or a document handle.
+
+        Answers "was the last attempt at this finished?" — which is what decides
+        between skipping an already-ingested document and resuming it.
+        """
+        result = await self._session.execute(
+            select(IngestionRun)
+            .where((IngestionRun.arxiv_id == target) | (IngestionRun.doc_key == target))
+            .order_by(IngestionRun.created_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
     async def recent_runs(self, limit: int = 20) -> Sequence[IngestionRun]:
         result = await self._session.execute(
             select(IngestionRun)
@@ -860,11 +1099,60 @@ class RunRepository:
         return result.scalars().unique().all()
 
 
+def _section_field(
+    titles: dict[tuple[str, int], tuple[str, int, int | None, int | None]],
+    chunk: Chunk | None,
+    *,
+    index: int,
+) -> Any:  # noqa: ANN401 - str | int | None, depending on the field asked for
+    """One component of a chunk's section reference, or ``None``.
+
+    Split out because the title and the level travel together and indexing into the
+    same lookup twice at the call site would be a way to lose the guard that a
+    chunk with no section yields ``None`` rather than raising.
+    """
+    if chunk is None or chunk.section_ordinal is None:
+        return None
+    found = titles.get((chunk.paper_id, chunk.section_ordinal))
+    return None if found is None else found[index]
+
+
 class SemanticSearchRepository:
     """Relational hydration for vector hits returned by a VectorStore."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def _section_titles(
+        self, chunks: Iterable[Chunk]
+    ) -> dict[tuple[str, int], tuple[str, int, int | None, int | None]]:
+        """Title of the section each chunk points at, in one query.
+
+        Resolved here rather than stored on the chunk because the pointer is the
+        point: one heading stored once, and a heading retitled in the source
+        reaches every chunk that cites it without a rewrite. Scoped to the papers
+        in the result rather than read whole — a corpus with a book's 196
+        sections should not pull every other document's on every keystroke.
+        """
+        wanted = {
+            (chunk.paper_id, chunk.section_ordinal)
+            for chunk in chunks
+            if chunk.section_ordinal is not None
+        }
+        if not wanted:
+            return {}
+        paper_ids = {paper_id for paper_id, _ in wanted}
+        result = await self._session.execute(
+            select(DocumentSection).where(DocumentSection.paper_id.in_(paper_ids))
+        )
+        # The whole reference, not just the title: a grouped result needs to say
+        # "pages 52-58", which is the section's span, not the span of whichever
+        # chunk happened to score highest.
+        return {
+            (row.paper_id, row.ordinal): (row.title, row.level, row.page_start, row.page_end)
+            for row in result.scalars().all()
+            if (row.paper_id, row.ordinal) in wanted
+        }
 
     async def hydrate(self, hits: Sequence[SearchHitWithScore]) -> list[dict[str, Any]]:
         if not hits:
@@ -876,6 +1164,7 @@ class SemanticSearchRepository:
             .options(selectinload(Chunk.paper))
         )
         chunks = {chunk.id: chunk for chunk in result.scalars().unique().all()}
+        titles = await self._section_titles(chunks.values())
         out: list[dict[str, Any]] = []
         for hit in hits:
             chunk = chunks.get(hit.chunk_id)
@@ -890,6 +1179,22 @@ class SemanticSearchRepository:
                     "text": chunk.text if chunk else hit.text,
                     "metadata": {
                         "arxiv_id": paper.arxiv_id if paper else None,
+                        # `display_id`, because a local document has no arXiv id
+                        # and printing None for it helps nobody.
+                        "display_id": paper.display_id if paper else None,
+                        "doc_key": paper.doc_key if paper else None,
+                        "kind": paper.kind if paper else None,
+                        "page_count": paper.page_count if paper else None,
+                        "page_start": chunk.page_start if chunk else None,
+                        "page_end": chunk.page_end if chunk else None,
+                        # Title *and* level: the level is what lets a caller
+                        # indent a hit under the section that contains it, which
+                        # is the difference between a flat list of passages and a
+                        # table of contents with the relevant parts marked.
+                        "section_title": _section_field(titles, chunk, index=0),
+                        "section_level": _section_field(titles, chunk, index=1),
+                        "section_page_start": _section_field(titles, chunk, index=2),
+                        "section_page_end": _section_field(titles, chunk, index=3),
                         "title": paper.title if paper else None,
                         "authors": list(paper.author_names) if paper else [],
                         "categories": list(paper.categories) if paper else [],

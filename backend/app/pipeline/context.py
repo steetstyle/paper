@@ -8,6 +8,7 @@ does not redo expensive work (downloads, MinerU) it already has.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +21,14 @@ from app.db.repositories import (
     PaperRepository,
     RawDocumentRepository,
     RunRepository,
+    SectionRepository,
 )
 from app.domain.enums import ContentKind, ContentSource
 from app.domain.models import (
     ContentPayload,
     ExtractedDocument,
+    MineruOptions,
+    PageRange,
     PaperMetadata,
     SearchQuery,
     TextChunk,
@@ -43,6 +47,26 @@ class PipelineContext:
     query: SearchQuery | None = None
     prefer_html: bool = True
     force: bool = False
+    local_path: Path | None = None
+    """Ingest this file from disk instead of downloading it from ArXiv.
+
+    The single thing that makes a run a document run rather than a paper run.
+    It travels with ``metadata`` because the two are two halves of the same
+    request: the file says where the bytes are, the metadata says what they are.
+    """
+    page_range: PageRange | None = None
+    pdf_outline: tuple[Any, ...] = ()
+    """The source PDF's bookmark tree, resolved to 1-based pages by the fetcher.
+    Empty for HTML, and empty for a third of real books — measured: 341 entries
+    for one textbook, 174 for another, 0 for a third."""
+    """Slice of the file to extract. ``None`` means the whole thing."""
+    mineru_options: MineruOptions = field(default_factory=MineruOptions)
+    """Per-document extraction overrides.
+
+    Per run rather than per process on purpose: a Turkish lecture-notes PDF that
+    needs OCR and an English textbook with a text layer belong in the same
+    corpus, and one process-wide setting cannot be right for both.
+    """
 
     # ------------------------------------------------- populated as we go
     metadata: PaperMetadata | None = None
@@ -51,6 +75,13 @@ class PipelineContext:
     content_kind: ContentKind | None = None
     document: ExtractedDocument | None = None
     chunks: list[TextChunk] = field(default_factory=list)
+    page_map: Any = None
+    """MinerU block -> page lookup, built once by the chunking step and reused by
+    the section step. Recomputing it would re-read and re-join every block of the
+    document for the same answer."""
+    sections: list[Any] = field(default_factory=list)
+    """The document's own structure. ``Any`` because it is built in the service
+    layer, which the context deliberately does not import."""
     chunk_rows: list[Chunk] = field(default_factory=list)
     embedded_count: int = 0
     reference_count: int = 0
@@ -75,6 +106,7 @@ class PipelineContext:
     runs: RunRepository = field(init=False)
     references: ReferenceRepository = field(init=False)
     assets: AssetRepository = field(init=False)
+    sections_repo: SectionRepository = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.papers = PaperRepository(self.session)
@@ -84,6 +116,7 @@ class PipelineContext:
         self.references = ReferenceRepository(self.session)
         # Needs the blob store so cropped images can be hashed in.
         self.assets = AssetRepository(self.session, blobs=self.blob_store)
+        self.sections_repo = SectionRepository(self.session)
 
     # ------------------------------------------------------------- helpers
     def require_paper_id(self) -> str:

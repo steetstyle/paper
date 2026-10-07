@@ -22,8 +22,10 @@ router = APIRouter(prefix="/arxiv", tags=["arxiv"])
 
 def to_schema(metadata: PaperMetadata) -> PaperOut:
     return PaperOut(
-        arxiv_id=metadata.arxiv_id,
-        versioned_id=metadata.versioned_id,
+        # `display_id` / the doc_key fallback: this route renders anything that
+        # can be ingested, and a local file has no arXiv id to print.
+        arxiv_id=metadata.display_id,
+        versioned_id=metadata.versioned_id or metadata.display_id,
         title=metadata.title,
         abstract=metadata.abstract,
         authors=[

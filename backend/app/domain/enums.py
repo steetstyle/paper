@@ -57,6 +57,30 @@ class ContentSource(StrEnum):
     PDF_MINERU = "pdf_mineru"
     PDF_PYPDF = "pdf_pypdf"
     ABSTRACT_ONLY = "abstract_only"
+    LOCAL_FILE = "local_file"
+    """The bytes came from a path on this machine, not from a URL."""
+
+
+class DocumentKind(StrEnum):
+    """What a corpus row *is*, for a reader who has to tell them apart.
+
+    A flat list rather than a hierarchy: a lecture-notes PDF and a textbook go
+    through the identical pipeline, so a base class would add a branch to every
+    dispatch for no behaviour change. Stored on ``papers.kind`` and used to
+    group and filter in the CLI and the API.
+    """
+
+    PAPER = "paper"
+    """An arXiv preprint — the only kind that has an arXiv id."""
+
+    BOOK = "book"
+    NOTES = "notes"
+    REPORT = "report"
+    THESIS = "thesis"
+
+    @property
+    def has_arxiv_id(self) -> bool:
+        return self is DocumentKind.PAPER
 
 
 class RunStatus(StrEnum):
@@ -66,6 +90,16 @@ class RunStatus(StrEnum):
     PARTIAL = "partial"
     FAILED = "failed"
     SKIPPED = "skipped"
+    ABANDONED = "abandoned"
+    """The process that owned this run is gone.
+
+    Not the same as ``FAILED``: nothing went wrong with the paper, the work
+    simply stopped. Kept distinct because the two need different responses — a
+    failed run is worth reading the error for, an abandoned one only needs
+    re-running. Measured on the live corpus before this existed: 38 runs stuck in
+    ``running``, the oldest for over a day, indistinguishable from work in
+    progress.
+    """
 
     @property
     def is_terminal(self) -> bool:
@@ -74,7 +108,18 @@ class RunStatus(StrEnum):
             RunStatus.PARTIAL,
             RunStatus.FAILED,
             RunStatus.SKIPPED,
+            RunStatus.ABANDONED,
         }
+
+    @property
+    def is_resumable(self) -> bool:
+        """Whether re-running this target can pick up from what it left behind.
+
+        Anything incomplete can be resumed: the expensive artefacts — the
+        downloaded blob and the extracted markdown — are stored as they are
+        produced, so a retry reuses them instead of paying for them again.
+        """
+        return not self.is_terminal
 
 
 class StepStatus(StrEnum):

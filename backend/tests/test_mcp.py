@@ -35,7 +35,7 @@ class StubExtractor:
 
 @pytest.fixture
 def container(settings, tmp_path: Path):  # noqa: ANN201
-    from app.container import Container
+    from app.container import Container, set_container
 
     settings.chunking = settings.chunking.model_copy(
         update={"max_tokens": 80, "overlap_tokens": 15, "min_tokens": 5}
@@ -53,7 +53,16 @@ def container(settings, tmp_path: Path):  # noqa: ANN201
     container._stores[f"{space.name}:{space.fingerprint}:{space.distance}"] = (  # noqa: SLF001
         InMemoryVectorStore(space)
     )
-    return container
+    # Installed process-wide, and cleared on the way out. The MCP resources call
+    # the real `get_container()`, which caches for the life of the process, so
+    # without this a container built against one test's temporary SQLite file
+    # survived into the next file and answered "no such table: embedding_spaces"
+    # — a failure that depended on which two files were run together.
+    set_container(container)
+    try:
+        yield container
+    finally:
+        set_container(None)
 
 
 @pytest.fixture
@@ -115,34 +124,65 @@ class TestRegistration:
         import anyio
 
         tools = anyio.run(mcp_server.list_tools)
-        assert {t.name for t in tools} == {
-            "search_arxiv",
-            "get_paper",
-            "ingest_paper",
-            "ask_paper_corpus",
-            "read_chunks",
-            "read_markdown",
-            "list_papers",
-            "list_embedding_spaces",
-            "status",
-            "list_projects",
-            "create_project",
-            "import_papers_to_project",
-            "list_project_papers",
-            "list_references",
-            "list_assets",
-            # Corpus discovery: "what is in here?" without a semantic query.
-            "search_equations",
-            "list_categories",
-            "list_authors",
-            "most_cited_references",
-            "list_ingest_runs",
-            # Maintenance: every one of these writes.
-            "reembed_space",
-            "chunk_kinds",
-            "set_paper_read",
-            "delete_project",
-        }
+        # Sorted on the way in, because a set comparison cannot see a duplicate:
+        # the SDK answers a second registration under one name with a warning and
+        # keeps the first, so a shadowed copy would be absorbed silently. Both
+        # lists are therefore sorted, and `test_no_tool_is_registered_twice` is
+        # what actually counts them.
+        assert sorted(t.name for t in tools) == sorted(
+            [
+                "search_arxiv",
+                "get_paper",
+                "ingest_paper",
+                "ask_paper_corpus",
+                "read_chunks",
+                "read_markdown",
+                "list_papers",
+                "list_embedding_spaces",
+                "status",
+                "list_projects",
+                "create_project",
+                "import_papers_to_project",
+                "list_project_papers",
+                "list_references",
+                "list_assets",
+                # Corpus discovery: "what is in here?" without a semantic query.
+                "search_equations",
+                "list_categories",
+                "list_authors",
+                "most_cited_references",
+                "list_ingest_runs",
+                "reap_ingest_runs",
+                # Local documents: what books and notes are in the corpus, the map
+                # of one, and the text of one section of it.
+                "list_documents",
+                "read_sections",
+                "read_section",
+                # Maintenance: every one of these writes.
+                "reembed_space",
+                "chunk_kinds",
+                "set_paper_read",
+                "delete_project",
+            ]
+        )
+
+    def test_no_tool_is_registered_twice(self, mcp_server) -> None:
+        """A duplicate registration is invisible from the outside.
+
+        The SDK answers one with a warning and keeps the first copy, so which
+        implementation a client gets is decided by import order rather than by
+        anything visible in the source. ``read_sections`` was registered in both
+        ``server`` and ``tools_corpus``, which is how it stayed unfixed: a
+        ``{...} == {...}`` assertion cannot see it.
+
+        The count is asserted exactly so that adding a tool is a deliberate edit
+        here rather than a silent drop-in.
+        """
+        import anyio
+
+        names = [tool.name for tool in anyio.run(mcp_server.list_tools)]
+        assert len(names) == 28
+        assert {name for name in names if names.count(name) > 1} == set()
 
     def test_read_only_tools_are_annotated(self, mcp_server) -> None:
         """Clients use this to auto-approve cheap calls.
@@ -182,6 +222,9 @@ class TestRegistration:
             "chunk_kinds",
             "set_paper_read",
             "delete_project",
+            # Writes, but idempotent: reaping an already-abandoned run is a
+            # no-op, so a client may auto-approve it.
+            "reap_ingest_runs",
         ):
             assert tools[name].annotations.read_only_hint is False, name
 

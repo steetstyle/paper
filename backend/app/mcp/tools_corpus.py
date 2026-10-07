@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from mcp.server.mcpserver.context import Context
 
 from app.logging import get_logger
+from app.mcp.devices import DEVICE_HELP, parse_device
 
 logger = get_logger(__name__)
 
@@ -231,6 +232,107 @@ def _add_discovery_tools(server: _Server) -> None:
         return _ok(count=len(rows), authors=rows)
 
     @server.tool(
+        name="list_documents",
+        title="List local documents",
+        description=(
+            "Textbooks, lecture notes, reports and theses in the corpus, with "
+            "their page count and the number of chunks each holds. The corpus "
+            "holds these alongside the arXiv papers and searches them together, "
+            "so this is how you find out what is in it. Filter by `kind` "
+            "(book, notes, report, thesis) or pass `doc_key` to resolve one."
+        ),
+        annotations=_ann(**_READS_LOCAL),
+    )
+    async def list_documents(
+        kind: str | None = None,
+        doc_key: str | None = None,
+        limit: int = 100,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        from app.db.repositories import PaperRepository  # noqa: PLC0415
+
+        container = _container()
+        async with container.session_factory() as session:
+            repo = PaperRepository(session)
+            if doc_key:
+                found = await repo.resolve(doc_key)
+                if found is None:
+                    return _fail(f"no document matching {doc_key!r}")
+                return _ok(documents=[await _describe_document(session, found)])
+            rows = await repo.list_documents(kind=kind, limit=max(1, min(limit, 1000)))
+            return _ok(
+                count=len(rows),
+                documents=[await _describe_document(session, row) for row in rows],
+            )
+
+    @server.tool(
+        name="read_sections",
+        title="Read a document's table of contents",
+        description=(
+            "The map a book is navigated with: its chapters and sections, each "
+            "with the pages it spans and how many chunks of it are stored. A "
+            "paper does not need this — a 700-page textbook does, because nobody "
+            "cites page 400 of one without first asking what is on it.\n\n"
+            "`read_section` is the other half: this says which sections exist, "
+            "that returns one section's text. Two sources are merged and each "
+            "row says which it came from: `pdf` for the document's own bookmarks, "
+            "`text` for headings recovered from the extracted text, which is the "
+            "only source for a document that ships without bookmarks.\n\n"
+            "`after_page` restricts the map to the part that was actually indexed, "
+            "which is narrower than `page_count` after a partial ingest, and "
+            "`max_level` to chapters or to chapters and sections."
+        ),
+        annotations=_ann(**_READS_LOCAL),
+    )
+    async def read_sections(
+        doc_key: str,
+        max_level: int | None = None,
+        after_page: int | None = None,
+        limit: int = 300,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        from app.db.repositories import PaperRepository, SectionRepository  # noqa: PLC0415
+
+        container = _container()
+        async with container.session_factory() as session:
+            found = await PaperRepository(session).resolve(doc_key)
+            if found is None:
+                return _fail(
+                    f"no document matching {doc_key!r}. Use list_documents to see "
+                    "what is in the corpus."
+                )
+            sections = SectionRepository(session)
+            rows = await sections.list_for_paper(found.id, max_level=max_level)
+            # One query for the whole column, not one per row: a book holds
+            # hundreds of sections and the number is printed on every one.
+            counts = await sections.count_chunks_in_sections(
+                found.id, [row.ordinal for row in rows]
+            )
+            out = [
+                {
+                    "ordinal": row.ordinal,
+                    "title": row.title,
+                    "level": row.level,
+                    "page_start": row.page_start,
+                    "page_end": row.page_end,
+                    "source": row.source,
+                    "chunks": counts.get(row.ordinal, 0),
+                }
+                for row in rows
+                if after_page is None
+                or (row.page_start is not None and row.page_start >= after_page)
+            ]
+            return _ok(
+                doc_key=found.doc_key,
+                title=found.title,
+                kind=found.kind,
+                page_count=found.page_count,
+                shown=len(out),
+                total=len(rows),
+                sections=out[: max(1, min(limit, 2000))],
+            )
+
+    @server.tool(
         name="most_cited_references",
         title="Most-cited corpus papers",
         description=(
@@ -257,39 +359,137 @@ def _add_discovery_tools(server: _Server) -> None:
         description=(
             "Recent ingestion runs with their status and error, newest first. "
             "Use it when a paper was not searchable after ingest_paper, or to "
-            "find which of a batch actually succeeded."
+            "find which of a batch actually succeeded. `stale=true` lists only "
+            "the runs whose owning process is gone — a run stuck in `running` for "
+            "hours is not work in progress, it is work that will never finish, and "
+            "re-running its target resumes it from the stored artefacts."
         ),
         annotations=_ann(**_READS_LOCAL),
     )
     async def list_ingest_runs(
         status: str | None = None,
+        stale: bool = False,
         limit: int = 20,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         from app.db.repositories import RunRepository  # noqa: PLC0415
+        from app.services.runs import find_stale_runs  # noqa: PLC0415
 
         container = _container()
+        hours = container.settings.ingestion.stale_run_hours
         async with container.session_factory() as session:
+            if stale:
+                # `stale` reports from the staleness check rather than filtering
+                # the recent list, so a run stuck a week ago is not excluded by a
+                # limit that was reached by recent ones.
+                found = await find_stale_runs(session, older_than_hours=hours)
+                return _ok(
+                    stale=True,
+                    stale_after_hours=hours,
+                    count=len(found),
+                    runs=[item.as_dict() for item in found],
+                )
             rows = await RunRepository(session).recent_runs(limit=max(1, min(limit, 200)))
         if status:
             wanted = status.strip().lower()
             rows = [row for row in rows if row.status.lower() == wanted]
         return _ok(
+            stale=False,
+            stale_after_hours=hours,
             count=len(rows),
             runs=[
                 {
                     "id": row.id,
                     "arxiv_id": row.arxiv_id,
+                    "doc_key": row.doc_key,
                     "status": row.status,
                     "trigger": row.trigger,
                     "steps": len(row.steps),
-                    "failed_steps": [step.name for step in row.steps if step.status != "succeeded"],
+                    "failed_steps": [
+                        step.name for step in row.steps if step.status != "succeeded"
+                    ],
                     "error": row.error,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                 }
                 for row in rows
             ],
         )
+
+    @server.tool(
+        name="reap_ingest_runs",
+        title="Close abandoned ingestion runs",
+        description=(
+            "Mark ingestion runs whose owning process is gone as `abandoned`, so a "
+            "list of runs stops reporting work that will never finish. A run is "
+            "stale once nothing has touched it for `hours` — measured from its "
+            "newest step, not from when it was created, so a long run that is still "
+            "making progress is never touched. Default is a dry run: pass "
+            "`apply=true` to change anything, because a reaped run's row is the "
+            "record of what happened. Then re-run the target with `ingest_paper` to "
+            "resume it from the stored blob and extracted markdown."
+        ),
+        # Idempotent: reaping an already-abandoned run changes nothing, so a
+        # client may auto-approve it the way it does the other writes.
+        annotations=_ann(**_WRITES_IDEMPOTENT),
+    )
+    async def reap_ingest_runs(
+        hours: float | None = None,
+        apply: bool = False,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        from app.services.runs import reap_stale_runs  # noqa: PLC0415
+
+        container = _container()
+        bound = hours if hours and hours > 0 else container.settings.ingestion.stale_run_hours
+        async with container.session_factory() as session:
+            out = await reap_stale_runs(session, older_than_hours=bound, dry_run=not apply)
+        out["stale_after_hours"] = bound
+        if out["found"] and not apply:
+            out["next"] = (
+                "Nothing changed. Call again with apply=true to close these runs, "
+                "then re-run each target with ingest_paper to resume it."
+            )
+        return out
+
+
+async def _describe_document(session: Any, paper: Any) -> dict[str, Any]:  # noqa: ANN401
+    """One corpus row as a document: what it is and how much of it is indexed."""
+    from sqlalchemy import func, select  # noqa: PLC0415
+
+    from app.db.models import Chunk, DocumentSection  # noqa: PLC0415
+
+    chunks = await session.scalar(
+        select(func.count()).select_from(Chunk).where(Chunk.paper_id == paper.id)
+    )
+    sections = await session.scalar(
+        select(func.count()).select_from(DocumentSection).where(
+            DocumentSection.paper_id == paper.id
+        )
+    )
+    pages = [
+        (row.page_start, row.page_end)
+        for row in (
+            await session.execute(
+                select(Chunk.page_start, Chunk.page_end).where(
+                    Chunk.paper_id == paper.id, Chunk.page_start.is_not(None)
+                )
+            )
+        ).all()
+        if row.page_start is not None
+    ]
+    return {
+        "doc_key": paper.doc_key,
+        "title": paper.title,
+        "kind": paper.kind,
+        "page_count": paper.page_count,
+        "chunks": chunks or 0,
+        "sections": sections or 0,
+        # The pages actually indexed, which is narrower than `page_count` after
+        # a partial ingest and is the honest answer to "can I cite this page?".
+        "indexed_pages": [min(p[0] for p in pages), max(p[1] for p in pages)]
+        if pages
+        else None,
+    }
 
 
 # ---------------------------------------------------------------- maintenance
@@ -306,7 +506,10 @@ def _add_maintenance_tools(server: _Server) -> None:
             "registered, instead of re-ingesting every paper.\\n\\n"
             "Scope with `project` or `arxiv_id` (any id spelling resolves). "
             "`dry_run` lists the targets and creates nothing. `force` re-embeds "
-            "papers the space already has."
+            "papers the space already has.\n\n"
+            f"`device`: {DEVICE_HELP} This is the one tool where it is usually "
+            "worth setting — re-embedding a whole space is thousands of chunks, "
+            "which is exactly the case where it measured several times faster."
         ),
         annotations=_ann(**_WRITES_IDEMPOTENT),
     )
@@ -317,6 +520,7 @@ def _add_maintenance_tools(server: _Server) -> None:
         force: bool = False,
         limit: int | None = None,
         dry_run: bool = False,
+        device: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         from app.db.space_repository import (  # noqa: PLC0415
@@ -324,6 +528,11 @@ def _add_maintenance_tools(server: _Server) -> None:
             SpaceConflictError,
         )
         from app.services.reembed import ReembedService  # noqa: PLC0415
+
+        try:
+            chosen_device = parse_device(device)
+        except ValueError as exc:
+            return _fail(str(exc))
 
         container = _container()
         try:
@@ -336,7 +545,7 @@ def _add_maintenance_tools(server: _Server) -> None:
             logger.info("mcp_reembed_progress", extra={"done": done, "total": total})
 
         service = ReembedService(
-            provider=container.provider_for(target),
+            provider=container.provider_for(target, chosen_device),
             space=target,
             session_factory=container.session_factory,
             store=container.vector_store_for(target),

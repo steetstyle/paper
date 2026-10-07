@@ -100,6 +100,10 @@ def _matches(payload: dict, filters: VectorFilter) -> bool:
         return False
     if filters.sources is not None and payload.get("source") not in filters.sources:
         return False
+    if filters.sections is not None:
+        pair = (payload.get("paper_id"), payload.get("section_ordinal"))
+        if pair not in set(filters.sections):
+            return False
     return all(payload.get(key) == expected for key, expected in filters.extra.items())
 
 

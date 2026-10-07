@@ -21,6 +21,7 @@ import os
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ from app.clients.content.mineru_resolver import (
 )
 from app.config import MineruSettings
 from app.domain.enums import ContentSource, MineruBackend
-from app.domain.models import ExtractedDocument
+from app.domain.models import ExtractedDocument, MineruOptions, PageRange
 from app.infra.text import (
     approx_tokens,
     collapse_whitespace,
@@ -54,6 +55,40 @@ class MineruBackendUnavailable(RuntimeError):
     """A backend cannot run in the current environment."""
 
 
+@dataclass(frozen=True, slots=True)
+class ExtractRequest:
+    """What one document needs from the extractor, beyond the global settings.
+
+    Exists because a corpus of papers and textbooks cannot be served by one set
+    of process-wide settings: a Turkish lecture-notes PDF that needs OCR and an
+    English textbook with a text layer are in the same corpus, and only the
+    former has any use for ``--method ocr``.
+    """
+
+    options: MineruOptions = field(default_factory=MineruOptions)
+    page_range: PageRange | None = None
+
+    def settings_for(self, defaults: MineruSettings) -> MineruSettings:
+        """Overlay this request on the configured defaults.
+
+        ``model_copy`` rather than mutation: the settings object is shared by
+        every backend in the process, and changing it for one document would
+        change it for the next one too.
+        """
+        updates: dict[str, Any] = {}
+        if self.options.language:
+            updates["language"] = self.options.language
+        if self.options.method:
+            updates["parse_method"] = self.options.method
+        if self.options.formula is not None:
+            updates["formula_enable"] = self.options.formula
+        if self.options.table is not None:
+            updates["table_enable"] = self.options.table
+        if self.options.device:
+            updates["device"] = self.options.device
+        return defaults.model_copy(update=updates) if updates else defaults
+
+
 class ExtractionBackend(ABC):
     """A single PDF -> Markdown strategy.
 
@@ -63,6 +98,15 @@ class ExtractionBackend(ABC):
     """
 
     name: MineruBackend
+    supports_page_range: bool = False
+    """Whether this backend can be told to extract only some pages.
+
+    Declared rather than discovered, because the in-process API genuinely has no
+    such parameter: ``do_parse`` takes the whole file. A backend that says
+    ``False`` is skipped when a range is asked for, instead of quietly returning
+    the entire book — which is what happened before this was tracked, and it
+    left a row claiming ``pages 20-44`` holding text from all 305.
+    """
 
     def __init__(self, settings: MineruSettings) -> None:
         self.settings = settings
@@ -72,11 +116,16 @@ class ExtractionBackend(ABC):
         """Whether this backend can run here."""
 
     @abstractmethod
-    async def extract(self, pdf_path: Path, workdir: Path) -> ExtractedDocument:
+    async def extract(
+        self, pdf_path: Path, workdir: Path, request: ExtractRequest | None = None
+    ) -> ExtractedDocument:
         """Convert one PDF into markdown + text."""
 
     def describe(self) -> str:
         return self.name.value
+
+    def settings_for(self, request: ExtractRequest | None) -> MineruSettings:
+        return request.settings_for(self.settings) if request else self.settings
 
     def cleanup(self, workdir: Path) -> None:
         if not workdir.exists():
@@ -112,18 +161,22 @@ class MineruPythonApiBackend(ExtractionBackend):
         api = self.api
         return f"python_api ({api.label})" if api else "python_api (not installed)"
 
-    async def extract(self, pdf_path: Path, workdir: Path) -> ExtractedDocument:
+    async def extract(
+        self, pdf_path: Path, workdir: Path, request: ExtractRequest | None = None
+    ) -> ExtractedDocument:
         api = self.api
         if api is None or not api.available:
             raise MineruBackendUnavailable("MinerU is not installed")
+        settings = self.settings_for(request)
         if api.generation == GENERATION_4:
-            return await self._extract_v4(api, pdf_path)
-        return await self._extract_legacy(api, pdf_path, workdir)
+            return await self._extract_v4(api, pdf_path, settings)
+        return await self._extract_legacy(api, pdf_path, workdir, settings)
 
     # -- 4.x ------------------------------------------------------------------
-    async def _extract_v4(self, api: MineruApi, pdf_path: Path) -> ExtractedDocument:
+    async def _extract_v4(
+        self, api: MineruApi, pdf_path: Path, settings: MineruSettings
+    ) -> ExtractedDocument:
         file_bytes = await asyncio.to_thread(pdf_path.read_bytes)
-        settings = self.settings
 
         kwargs: dict[str, Any] = {
             "effort": settings.effort,
@@ -171,14 +224,17 @@ class MineruPythonApiBackend(ExtractionBackend):
 
     # -- 2.x / 1.x ------------------------------------------------------------
     async def _extract_legacy(
-        self, api: MineruApi, pdf_path: Path, workdir: Path
+        self,
+        api: MineruApi,
+        pdf_path: Path,
+        workdir: Path,
+        settings: MineruSettings,
     ) -> ExtractedDocument:
         output_dir = workdir / "mineru"
         output_dir.mkdir(parents=True, exist_ok=True)
-        settings = self.settings
 
         if api.generation == GENERATION_1:
-            return await self._extract_v1(api, pdf_path, output_dir)
+            return await self._extract_v1(api, pdf_path, output_dir, settings)
 
         if api.read_fn is None or (api.do_parse is None and api.aio_do_parse is None):
             raise MineruBackendUnavailable("mineru 2.x requires read_fn + do_parse")
@@ -236,7 +292,11 @@ class MineruPythonApiBackend(ExtractionBackend):
         )
 
     async def _extract_v1(
-        self, api: MineruApi, pdf_path: Path, output_dir: Path
+        self,
+        api: MineruApi,
+        pdf_path: Path,
+        output_dir: Path,
+        settings: MineruSettings,
     ) -> ExtractedDocument:
         """magic-pdf 1.x: keyword-only ``do_parse`` with ``parse_method``."""
         assert api.do_parse is not None  # guarded by available()
@@ -244,12 +304,12 @@ class MineruPythonApiBackend(ExtractionBackend):
             "output_dir": str(output_dir),
             "pdf_file_name": pdf_path.stem,
             "pdf_bytes": await asyncio.to_thread(pdf_path.read_bytes),
-            "parse_method": self.settings.parse_method,
-            "return_images": self.settings.extract_images,
+            "parse_method": settings.parse_method,
+            "return_images": settings.extract_images,
         }
         try:
             result = await _with_timeout(
-                asyncio.to_thread(api.do_parse, **kwargs), self.settings.timeout_seconds
+                asyncio.to_thread(api.do_parse, **kwargs), settings.timeout_seconds
             )
         except TypeError:
             # Some 1.x builds take positional args.
@@ -260,9 +320,9 @@ class MineruPythonApiBackend(ExtractionBackend):
                     pdf_path.stem,
                     await asyncio.to_thread(pdf_path.read_bytes),
                     [],
-                    self.settings.parse_method,
+                    settings.parse_method,
                 ),
-                self.settings.timeout_seconds,
+                settings.timeout_seconds,
             )
         blocks = _normalise_result(result)
         markdown = "\n\n".join(p for p in (_render_block(b) for b in blocks) if p)
@@ -309,26 +369,46 @@ class MineruCliBackend(ExtractionBackend):
         cli = self.cli
         return f"cli ({cli.label})" if cli else "cli (not on PATH)"
 
-    async def extract(self, pdf_path: Path, workdir: Path) -> ExtractedDocument:
+    supports_page_range = True
+    """The CLI takes ``-s``/``-e``, which is the only route to a partial parse.
+
+    Which is why :class:`MineruExtractor` prefers this backend whenever a range
+    is asked for: the in-process API has no such parameter, so a page range and
+    the python API cannot both be honoured by one call.
+    """
+
+    async def extract(
+        self, pdf_path: Path, workdir: Path, request: ExtractRequest | None = None
+    ) -> ExtractedDocument:
         cli = self.cli
         if cli is None:
             raise MineruBackendUnavailable("no `mineru` or `magic-pdf` binary on PATH")
 
         output_dir = workdir / "mineru_cli"
         output_dir.mkdir(parents=True, exist_ok=True)
+        settings = self.settings_for(request)
+        pages = request.page_range if request else None
 
         if cli.generation == GENERATION_4:
-            return await self._run_v4(cli, pdf_path, output_dir)
-        return await self._run_legacy(cli, pdf_path, output_dir)
+            return await self._run_v4(cli, pdf_path, output_dir, settings, pages)
+        return await self._run_legacy(cli, pdf_path, output_dir, settings, pages)
 
-    async def _run_v4(self, cli: Any, pdf_path: Path, output_dir: Path) -> ExtractedDocument:
-        settings = self.settings
+    async def _run_v4(
+        self,
+        cli: Any,
+        pdf_path: Path,
+        output_dir: Path,
+        settings: MineruSettings,
+        pages: PageRange | None,
+    ) -> ExtractedDocument:
         target = output_dir / f"{pdf_path.stem}.md"
 
         command = [cli.binary, "parse", str(pdf_path), "-o", str(target), "--format", "markdown"]
         if settings.tier:
             command += ["--tier", settings.tier]
-        if settings.parse_method != "auto":
+        if pages is not None:
+            command += ["--pages", f"{pages.start}-{pages.end}"]
+        elif settings.parse_method != "auto":
             command += ["--pages", "all"]
         command += ["--wait", str(int(settings.timeout_seconds)), "--force"]
         command += settings.extra_args
@@ -348,8 +428,14 @@ class MineruCliBackend(ExtractionBackend):
             },
         )
 
-    async def _run_legacy(self, cli: Any, pdf_path: Path, output_dir: Path) -> ExtractedDocument:
-        settings = self.settings
+    async def _run_legacy(
+        self,
+        cli: Any,
+        pdf_path: Path,
+        output_dir: Path,
+        settings: MineruSettings,
+        pages: PageRange | None,
+    ) -> ExtractedDocument:
         # Long flags only beyond -p/-o: in MinerU 2.x `-s` is `--start` (a page
         # index), NOT `--source`, so short flags are actively misleading here.
         # `-p`/`-o` are the only short forms stable across 1.x and 2.x.
@@ -372,11 +458,35 @@ class MineruCliBackend(ExtractionBackend):
             full += settings.extra_args
 
         # Progressively drop flags for builds that reject them.
-        commands: list[list[str]] = [
-            full,
+        commands: list[list[str]] = [full]
+        if pages is not None:
+            # `-s`/`-e` are 0-based in MinerU 2.x (measured: `-s 40 -e 52`
+            # produced 13 pages of output), while every page number this program
+            # shows a user is 1-based. The subtraction is the whole reason a page
+            # range can be off by one and nobody notices.
+            ranged = [
+                cli.binary,
+                "-p", str(pdf_path),
+                "-o", str(output_dir),
+                "-s", str(pages.start - 1),
+                "-e", str(pages.end - 1),
+                "--backend", settings.backend,
+            ]
+            commands.append(ranged)
+        commands += [
             [cli.binary, "-p", str(pdf_path), "-o", str(output_dir), "--backend", settings.backend],
             [cli.binary, "-p", str(pdf_path), "-o", str(output_dir)],
         ]
+        # The bare fallback would silently extract the whole book when a range
+        # was asked for, so it is not offered in that case: better to fail than
+        # to store the wrong pages under the right label.
+        if pages is not None:
+            commands = [c for c in commands if "-s" in c or "-e" in c or "--backend" not in c]
+            commands = [c for c in commands if any(f in c for f in ("-s", "-e"))]
+        logger.info(
+            "mineru_page_range",
+            extra={"pages": str(pages) if pages else "all", "attempts": len(commands)},
+        )
 
         errors: list[str] = []
         for command in commands:
@@ -463,30 +573,51 @@ class PyPdfBackend(ExtractionBackend):
     def describe(self) -> str:
         return "pypdf" if self.available() else "pypdf (not installed)"
 
-    async def extract(self, pdf_path: Path, workdir: Path) -> ExtractedDocument:
-        return await asyncio.to_thread(self._extract_sync, pdf_path)
+    supports_page_range = True
+    """Page selection is native here — pypdf iterates whatever pages it is told."""
 
-    def _extract_sync(self, pdf_path: Path) -> ExtractedDocument:
+    async def extract(
+        self, pdf_path: Path, workdir: Path, request: ExtractRequest | None = None
+    ) -> ExtractedDocument:
+        pages = request.page_range if request else None
+        return await asyncio.to_thread(self._extract_sync, pdf_path, pages)
+
+    def _extract_sync(self, pdf_path: Path, pages: PageRange | None) -> ExtractedDocument:
         try:
             from pypdf import PdfReader  # noqa: PLC0415
         except ImportError:  # pragma: no cover
             from PyPDF2 import PdfReader  # type: ignore[no-redef] # noqa: PLC0415
 
         reader = PdfReader(str(pdf_path))
-        pages: list[str] = []
-        for index, page in enumerate(reader.pages):
+        total = len(reader.pages)
+        if pages is None:
+            first, last = 1, total
+        else:
+            first = min(pages.start, total)
+            last = min(pages.end, total)
+
+        chunks: list[str] = []
+        for number in range(first, last + 1):
+            page = reader.pages[number - 1]
             try:
                 text = page.extract_text() or ""
             except Exception as exc:  # noqa: BLE001 - one bad page must not kill the doc
-                logger.warning("pypdf_page_failed", extra={"page": index + 1, "error": str(exc)})
+                logger.warning("pypdf_page_failed", extra={"page": number, "error": str(exc)})
                 text = ""
-            pages.append(f"## Page {index + 1}\n\n{text}")
+            # The number in the heading is the book's own, not the slice's, so
+            # the markdown reads correctly even for a partial extraction.
+            chunks.append(f"## Page {number}\n\n{text}")
         return _build_document(
-            markdown="\n\n".join(pages),
+            markdown="\n\n".join(chunks),
             blocks=[],
             source=ContentSource.PDF_PYPDF,
             backend="pypdf",
-            meta={"pages": len(reader.pages), "page_count": len(reader.pages)},
+            meta={
+                "pages": last - first + 1,
+                "page_count": total,
+                "page_start": first,
+                "page_end": last,
+            },
         )
 
 
@@ -674,9 +805,12 @@ class MineruExtractor:
         """Human-readable backend status for `paper doctor`."""
         return {backend.name.value: backend.describe() for backend in self._backends.values()}
 
-    async def extract_pdf(self, pdf_path: Path) -> ExtractedDocument:
-        """Extract text from a PDF using the first backend that succeeds."""
+    async def extract_pdf(
+        self, pdf_path: Path, request: ExtractRequest | None = None
+    ) -> ExtractedDocument:
+        """Extract text from a PDF using the first backend that can honour it."""
         pdf_path = Path(pdf_path)
+        wanted = request.page_range if request else None
         # Check the input before the environment: a missing file is a caller bug
         # and must never be masked by "no backend installed".
         if not pdf_path.exists():
@@ -690,9 +824,18 @@ class MineruExtractor:
 
         errors: list[str] = []
         for backend in self._backends.values():
+            if wanted is not None and not backend.supports_page_range:
+                # Skipped, not attempted: the in-process API takes the whole
+                # file and would return every page under a label claiming a
+                # range. Failing loudly here is the only honest option.
+                logger.info(
+                    "mineru_backend_skipped_no_page_range",
+                    extra={"backend": backend.name.value, "pages": str(wanted)},
+                )
+                continue
             workdir = Path(tempfile.mkdtemp(prefix=f"mineru-{backend.name.value}-"))
             try:
-                document = await backend.extract(pdf_path, workdir)
+                document = await backend.extract(pdf_path, workdir, request)
                 if document.is_usable:
                     logger.info(
                         "pdf_extracted",
@@ -717,4 +860,11 @@ class MineruExtractor:
                 if not self._settings.keep_artifacts:
                     backend.cleanup(workdir)
 
+        if wanted is not None and all(
+            not b.supports_page_range for b in self._backends.values()
+        ):
+            raise ExtractionError(
+                f"no installed backend can extract pages {wanted} only; "
+                "the `mineru` CLI can (it takes -s/-e), the in-process API cannot"
+            )
         raise ExtractionError("all PDF backends failed: " + "; ".join(errors))

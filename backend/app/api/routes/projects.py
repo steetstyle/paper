@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.api.deps import SessionDep, normalize_arxiv_id_or_400
+from app.api.deps import DeviceDep, SessionDep, normalize_arxiv_id_or_400
 from app.api.schemas import (
     AssetCounts,
     AssetsResponse,
@@ -155,13 +155,23 @@ async def import_papers(
     ingest: bool = Query(
         default=False, description="Ingest anything not already in the corpus."
     ),
+    device: DeviceDep = None,
 ) -> ImportResult:
     """Link papers into a project. Idempotent: re-importing is a no-op.
 
     With ``ingest=true`` anything missing is fetched and ingested first. That is a
     write against the network and minutes of CPU per paper, so it is opt-in.
+
+    ``?device=`` applies to that ingest only — the one case here that embeds text.
     """
     projects, project = await _project_or_404(session, slug)
+    # Read out of the ORM object before anything can expire it. The ingest branch
+    # below rolls the session back, and a rollback expires every loaded instance;
+    # touching `project.slug` afterwards is then an implicit refresh — IO on a
+    # synchronised attribute access, outside async context, which raises
+    # MissingGreenlet. It failed on every single call of this route, not
+    # intermittently, which is why it went unnoticed behind a green test suite.
+    project_slug = project.slug
     resolved, missing = await projects.resolve_paper_ids(arxiv_ids)
 
     if missing and ingest:
@@ -169,7 +179,7 @@ async def import_papers(
         from app.services.ingestion import build_ingestion_service  # noqa: PLC0415
 
         container = get_container()
-        service = build_ingestion_service(container, container.active_space)
+        service = build_ingestion_service(container, container.active_space, device=device)
         for arxiv_id in missing:
             await service.ingest_paper(
                 normalize_arxiv_id_or_400(arxiv_id),
@@ -178,6 +188,12 @@ async def import_papers(
                 trigger="api",
             )
         await session.rollback()
+        # The rollback above expired every loaded instance, including `project`,
+        # which `add_papers` needs. Reload it here, in async context — touching an
+        # expired attribute would try to refresh it from a synchronous access
+        # point and raise MissingGreenlet, which is what this route did on every
+        # call.
+        await session.refresh(project)
         projects = ProjectRepository(session)
         resolved, missing = await projects.resolve_paper_ids(arxiv_ids)
 
@@ -188,9 +204,9 @@ async def import_papers(
     for paper_id in resolved:
         row = await stored.get(paper_id)
         if row is not None:
-            titles.append(row.arxiv_id)
+            titles.append(row.display_id)
     return ImportResult(
-        project=project.slug,
+        project=project_slug,
         requested=len(arxiv_ids),
         resolved=len(resolved),
         added=added,
@@ -262,7 +278,7 @@ async def paper_references(
     """
     papers = PaperRepository(session)
     normalized = normalize_arxiv_id_or_400(arxiv_id)
-    paper = await papers.get_by_arxiv_id(normalized)
+    paper = await papers.resolve(normalized)
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
 
@@ -272,15 +288,18 @@ async def paper_references(
     if incoming:
         citing = await refs.citing_papers(paper.id, limit=limit)
         return ReferencesResponse(
-            arxiv_id=paper.arxiv_id,
+            # `display_id`, not `arxiv_id`: the citation graph is only defined
+            # for papers, but this route is reachable for any document and must
+            # answer with something rather than None.
+            arxiv_id=paper.display_id,
             direction="cited-by",
             count=len(citing),
-            cited_by=[row.arxiv_id for row in citing],
+            cited_by=[paper.display_id for paper in citing],
         )
 
     rows = await refs.list_references(paper.id, limit=limit, resolved_only=resolved_only)
     return ReferencesResponse(
-        arxiv_id=paper.arxiv_id,
+        arxiv_id=paper.display_id,
         direction="references",
         count=len(rows),
         references=[
@@ -319,7 +338,7 @@ async def _paper_or_404(session: SessionDep, arxiv_id: str):  # noqa: ANN202
     papers = PaperRepository(session)
     normalized = normalize_arxiv_id_or_400(arxiv_id)
     # get_by_arxiv_id normalises, so the versioned and bare forms both resolve.
-    paper = await papers.get_by_arxiv_id(normalized)
+    paper = await papers.resolve(normalized)
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
     return paper
@@ -451,7 +470,7 @@ async def search_equations(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
     if arxiv_id:
         papers = PaperRepository(session)
-        wanted = [await papers.get_by_arxiv_id(one) for one in arxiv_id]
+        wanted = [await papers.resolve(one) for one in arxiv_id]
         resolved = [paper.id for paper in wanted if paper is not None]
         missing = [one for one, paper in zip(arxiv_id, wanted, strict=True) if paper is None]
         if missing:

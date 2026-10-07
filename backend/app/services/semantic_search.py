@@ -159,6 +159,7 @@ class SemanticSearchService:
         sources: list[str] | None = None,
         content_kinds: list[str] | None = None,
         project: str | None = None,
+        sections: list[tuple[str, int]] | None = None,
     ) -> list[SemanticSearchHit]:
         """Search the corpus by meaning.
 
@@ -170,6 +171,10 @@ class SemanticSearchService:
           not just internal ids — see :meth:`resolve_paper_ids`.
         - ``content_kinds`` restricts to what the chunks *are* — equations,
           figures, tables, references, abstracts, code or body.
+        - ``sections`` restricts to named parts of documents — "only section 2.2
+          of this book". Already resolved to ``(paper_id, ordinal)`` pairs by the
+          caller, because turning "Debye" into an ordinal needs the section table
+          and no vector store knows it exists.
 
         ``project`` and ``paper_ids`` together intersect, which is the useful
         reading: "the equations in the papers of this project".
@@ -227,6 +232,10 @@ class SemanticSearchService:
             categories=[category] if category else None,
             content_kinds=content_kinds,
             sources=sources,
+            # Intersected with the paper scope rather than replacing it: naming a
+            # section of one book must not silently drop the `--paper` the caller
+            # also asked for, and must not widen past it either.
+            sections=sections,
         )
         self.last_scope = self._scope(
             project=project,

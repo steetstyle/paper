@@ -45,6 +45,17 @@ class VectorFilter:
     """Chunk kinds: body, abstract, figure, table, equation, reference, code."""
 
     sources: list[str] | None = None
+
+    sections: list[tuple[str, int]] | None = None
+    """``(paper_id, section_ordinal)`` pairs — the sections of a document to search.
+
+    Ordinals are per-document, so a bare list of ints would mean different things
+    in two books and could silently intersect them. Pairs are unambiguous, and the
+    resolution of a *name* to an ordinal happens before this point, in SQL, where
+    the section table lives — a vector store has no business knowing what a
+    heading is.
+    """
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
@@ -68,13 +79,22 @@ class VectorFilter:
         """
         return any(
             value is not None and not value
-            for value in (self.paper_ids, self.categories, self.content_kinds, self.sources)
+            for value in (
+                self.paper_ids,
+                self.categories,
+                self.content_kinds,
+                self.sources,
+                self.sections,
+            )
         )
 
     def describe(self) -> dict[str, Any]:
         """What was actually applied, for echoing back to the caller."""
         return {
             "paper_ids": len(self.paper_ids or []),
+            # Counted, not listed: a book has hundreds of sections and the point
+            # of this echo is "how narrow was it", not "which ones".
+            "sections": len(self.sections or []),
             "categories": self.categories or [],
             "content_kinds": self.content_kinds or [],
             "sources": self.sources or [],

@@ -251,6 +251,21 @@ class IngestionSettings(BaseSettings):
     delete_existing_embeddings: bool = True
     embed_abstract_as_first_chunk: bool = True
 
+    stale_run_hours: float = Field(
+        default=6.0,
+        gt=0,
+        validation_alias="INGESTION__STALE_RUN_HOURS",
+    )
+    """When an unfinished run is presumed dead.
+
+    A run is only reaped once nothing has touched it for this long. The bound has
+    to exceed the slowest *legitimate* single step, because a run mid-extraction
+    writes no step record until that step finishes: measured, MinerU runs at about
+    1.7 pages/s, so the slowest real step is minutes, not hours. Six hours is
+    generous enough that a false positive is not a thing that happens, and a false
+    positive costs a re-ingest rather than data — the extracted markdown is reused.
+    """
+
 
 class LoggingSettings(BaseSettings):
     model_config = _cfg("LOG_")

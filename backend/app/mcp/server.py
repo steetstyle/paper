@@ -39,11 +39,12 @@ from app import __version__
 from app.clients.arxiv.exceptions import ArxivError
 from app.config import get_settings
 from app.container import Container, get_container
-from app.db.models import RawDocument
+from app.db.models import Chunk, RawDocument
 from app.db.space_repository import SpaceConflictError
 from app.db.spaces import EmbeddingSpace
 from app.domain.models import SearchQuery
 from app.logging import get_logger
+from app.mcp.devices import DEVICE_HELP, parse_device
 from app.services.chunk_kinds import parse_kinds
 from app.services.ingestion import build_ingestion_service
 from app.services.semantic_search import SemanticSearchService, parse_sources
@@ -163,6 +164,38 @@ def _blob_path(uri: str) -> Path | None:
     """Resolve a blob-store URI to a readable file, if it still exists."""
     candidate = Path(uri[len("file://") :] if uri.startswith("file://") else uri)
     return candidate if candidate.exists() else None
+
+
+def _section_length(chunks: list[Chunk]) -> int:
+    """Characters one section's text is once joined, separators included."""
+    return sum(len(chunk.text) for chunk in chunks) + 2 * max(0, len(chunks) - 1)
+
+
+def _section_parts(chunks: list[Chunk], budget: int) -> list[dict[str, Any]]:
+    """A section's chunks as the payload reports them, cut to ``budget``.
+
+    Cut per chunk rather than on the joined string so ``text`` and the pages
+    beside it always describe the same words — a chunk trimmed short still
+    reports the page it was cut on, which is true of the text that remains.
+    """
+    parts: list[dict[str, Any]] = []
+    used = 0
+    for chunk in chunks:
+        room = budget - used - 2 * len(parts)
+        if room <= 0:
+            break
+        text = chunk.text[:room]
+        parts.append(
+            {
+                "ordinal": chunk.ordinal,
+                "page_start": chunk.page_start,
+                "page_end": chunk.page_end,
+                "kind": chunk.content_kind,
+                "text": text,
+            }
+        )
+        used += len(text)
+    return parts
 
 
 def _paper_dict(metadata: Any, *, with_abstract: bool = True) -> dict[str, Any]:  # noqa: ANN401
@@ -712,7 +745,8 @@ async def get_paper(
         "text with MinerU, chunk, embed and index. Slow - minutes for a PDF on "
         "CPU - and it writes to the corpus. Safe to call twice: re-ingesting "
         "replaces that paper's vectors rather than duplicating them.\n\n"
-        "Pass `query` instead of `arxiv_id` to ingest the top N hits of a search."
+        "Pass `query` instead of `arxiv_id` to ingest the top N hits of a search.\n\n"
+        f"`device` applies to this ingest only: {DEVICE_HELP}"
     ),
     annotations=_ann(**_WRITES_IDEMPOTENT),
 )
@@ -723,10 +757,16 @@ async def ingest_paper(
     prefer_html: bool = True,
     force: bool = False,
     space: str | None = None,
+    device: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     if not arxiv_id and not query:
         return _fail("Provide either arxiv_id or query.")
+
+    try:
+        chosen_device = parse_device(device)
+    except ValueError as exc:
+        return _fail(str(exc))
 
     container = _container()
     try:
@@ -734,7 +774,7 @@ async def ingest_paper(
     except SpaceConflictError as exc:
         return _fail(str(exc))
 
-    service = build_ingestion_service(container, target)
+    service = build_ingestion_service(container, target, device=chosen_device)
     try:
         await container.vector_store_for(target).ensure_ready()
     except Exception as exc:  # noqa: BLE001
@@ -765,6 +805,9 @@ async def ingest_paper(
     await _progress(ctx, 1.0, "done")
     return _ok(
         space=target.name,
+        # Echoed rather than assumed: a caller who asked for cuda should be able
+        # to confirm it got cuda, not the configured default.
+        device=service.embedding_device,
         status=result.status.value,
         run_ids=result.run_ids,
         paper_ids=result.paper_ids,
@@ -790,7 +833,13 @@ async def ingest_paper(
         "  content  - only these chunk kinds: body, abstract, figure, table, "
         "equation, reference, code (repeatable; plurals like 'equations' work)\n\n"
         "Prefer this over re-ingesting: it is instant. Results come from chunk "
-        "text, not abstracts, so the wording differs from ArXiv metadata."
+        "text, not abstracts, so the wording differs from ArXiv metadata.\n\n"
+        f"`device`: {DEVICE_HELP}\n\n"
+        "`section` narrows to one part of a document before ranking: a book's own "
+        "numbering (\"2.2\") or words from its title (\"Debye\"). Add `doc_key` so the "
+        "name is matched in that book only rather than across the corpus. Every "
+        "matching section is included, ranked best-first; each hit reports the "
+        "section it came from and the page."
     ),
     annotations=_ann(**_READ_ONLY_REMOTE),
 )
@@ -805,10 +854,18 @@ async def ask_paper_corpus(
     content: list[str] | None = None,
     source: list[str] | None = None,
     min_score: float | None = None,
+    device: str | None = None,
+    section: str | None = None,
+    doc_key: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     if not query.strip():
         return _fail("query must not be empty")
+
+    try:
+        chosen_device = parse_device(device)
+    except ValueError as exc:
+        return _fail(str(exc))
 
     container = _container()
     try:
@@ -822,9 +879,31 @@ async def ask_paper_corpus(
     except ValueError as exc:
         return _fail(str(exc))
 
+    # Resolved here rather than inside the search service: turning "Debye" into an
+    # ordinal needs the section table, and a vector store knows nothing about
+    # headings. Failing on an unmatched name is deliberate — a section filter that
+    # silently matched nothing would look identical to "this topic is not covered".
+    section_keys: list[tuple[str, int]] | None = None
+    sections_meta: list[dict[str, Any]] = []
+    if section:
+        from app.services.sections_query import find_sections  # noqa: PLC0415
+
+        async with container.session_factory() as session:
+            matched = await find_sections(
+                session, section, doc_keys=[doc_key] if doc_key else None
+            )
+        if not matched:
+            where = f" in {doc_key!r}" if doc_key else " in the corpus"
+            return _fail(
+                f"no section matching {section!r}{where}; try a word from its "
+                "title or its number (2.2)"
+            )
+        section_keys = [item.key for item in matched]
+        sections_meta = [item.as_dict() for item in matched]
+
     service = SemanticSearchService(
         vector_store=container.vector_store_for(target),
-        embeddings=container.provider_for(target),
+        embeddings=container.provider_for(target, chosen_device),
         session_factory=container.session_factory,
         space=target,
     )
@@ -838,6 +917,7 @@ async def ask_paper_corpus(
             project=project,
             sources=sources,
             min_score=min_score,
+            sections=section_keys,
         )
     except ValueError as exc:
         return _fail(str(exc))
@@ -863,12 +943,32 @@ async def ask_paper_corpus(
         dimensions=target.dimensions,
         count=len(hits),
         scope=service.last_scope,
+        # Which sections the name resolved to. Echoed because "Debye" matching
+        # eleven sections is a fact the caller needs in order to read the hits:
+        # they cannot tell a widened scope from the one they asked for.
+        sections=sections_meta or None,
         hits=[
             {
+                # `display_id`, not `arxiv_id`: a textbook has none, and an
+                # assistant reading a corpus of papers *and* books needs a handle
+                # it can pass to `read_section` or `read_chunks`.
                 "arxiv_id": hit.metadata.get("arxiv_id"),
-                "title": hit.metadata.get("title"),
-                "section": hit.metadata.get("heading"),
+                "display_id": hit.metadata.get("display_id"),
+                "doc_key": hit.metadata.get("doc_key"),
+                # `content_kind`, not `kind`: the vector payload's `kind` is the
+                # *paper's* kind (paper/book/notes), so reading it here answered
+                # "what is this chunk" with "paper" for every single chunk.
                 "kind": hit.metadata.get("content_kind"),
+                "title": hit.metadata.get("title"),
+                # The document's own section, preferred over the chunker's
+                # markdown heading: in a book the two can name the same passage
+                # differently, and only one of them is the book's structure.
+                "section": (
+                    hit.metadata.get("section_title") or hit.metadata.get("heading")
+                ),
+                "section_level": hit.metadata.get("section_level"),
+                "page_start": hit.metadata.get("page_start"),
+                "page_end": hit.metadata.get("page_end"),
                 "score": round(hit.score, 4),
                 "text": hit.text[:max_chars],
                 "truncated": len(hit.text) > max_chars,
@@ -876,6 +976,99 @@ async def ask_paper_corpus(
             for hit in hits
         ],
     )
+
+
+# `read_sections` — the map of a document — lives in `app.mcp.tools_corpus`, next to
+# `list_documents`, which resolves the same `doc_key`. It was registered here too,
+# and the second registration was silently shadowed by the first.
+
+@server.tool(
+    name="read_section",
+    title="Read one section's text",
+    description=(
+        "The text of one section of a document, in order, with the page each part "
+        "came from. This is the other half of a `section=` search: that one finds "
+        "passages by meaning inside a section, this one returns the section.\n\n"
+        "`name` accepts the book's own numbering (\"2.2\") or words from its title "
+        "(\"Debye\"), and every match is returned ranked best-first — a word often "
+        "names several sections. `include_subsections` lists what is nested inside "
+        "without their text. `max_chars` is the whole call's budget, not each "
+        "section's, so a word naming a dozen sections returns the first few whole "
+        "rather than a dozen stubs; `omitted` counts the matches it never "
+        "reached.\n\n"
+        "The text is the chunks that point at the section, not its page range: a "
+        "section can span ten pages of which four produced text, and the page is "
+        "reported per part because there it is a fact.\n\n"
+        "To see what a document holds before naming anything, read_sections lists "
+        "its sections."
+    ),
+    annotations=_ann(**_READS_LOCAL),
+)
+async def read_section(
+    doc_key: str,
+    name: str,
+    include_subsections: bool = False,
+    max_chars: int = 20000,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    from app.db.repositories import PaperRepository, SectionRepository  # noqa: PLC0415
+    from app.services.sections_query import find_sections, sections_within  # noqa: PLC0415
+
+    container = _container()
+    async with container.session_factory() as session:
+        paper = await PaperRepository(session).resolve(doc_key)
+        if paper is None:
+            return _fail(f"no document matching {doc_key!r}")
+        matched = await find_sections(session, name, doc_keys=[paper.doc_key])
+        if not matched:
+            # Failing rather than returning an empty list: an unmatched name and
+            # a section that produced no text look identical otherwise, and the
+            # first is a typo the caller can fix.
+            return _fail(
+                f"no section matching {name!r} in {paper.doc_key!r}; "
+                f"use read_sections('{paper.doc_key}') to list them"
+            )
+        repo = SectionRepository(session)
+        all_sections = await repo.list_for_paper(paper.id)
+        by_ordinal = {row.ordinal: row for row in all_sections}
+
+        out: list[dict[str, Any]] = []
+        # One budget for the call, spent in document order: the matches are ranked
+        # best-first, so a name naming a dozen sections spends it on the one the
+        # caller most likely meant instead of returning a dozen empty stubs.
+        budget = max(1, max_chars)
+        for match in matched:
+            chunks = await repo.list_for_section(paper.id, match.ordinal)
+            parts = _section_parts(chunks, budget)
+            text = "\n\n".join(part["text"] for part in parts)
+            entry = match.as_dict()
+            entry.update(
+                {
+                    "chunks": parts,
+                    "text": text,
+                    "truncated": len(text) < _section_length(chunks),
+                    "subsections": [
+                        {"ordinal": row.ordinal, "title": row.title, "level": row.level}
+                        for row in sections_within(match, by_ordinal.values())
+                    ]
+                    if include_subsections
+                    else None,
+                }
+            )
+            out.append(entry)
+            budget -= len(text)
+            if budget <= 0:
+                break
+        return _ok(
+            doc_key=paper.doc_key,
+            name=name,
+            count=len(out),
+            max_chars=max_chars,
+            # How many ranked matches the budget never reached. Named rather than
+            # called `truncated`, which each section uses for its own cut text.
+            omitted=len(matched) - len(out),
+            sections=out,
+        )
 
 
 @server.tool(

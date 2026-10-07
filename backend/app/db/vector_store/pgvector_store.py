@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Float, and_, delete, exists, func, inspect, select, type_coerce
+from sqlalchemy import Float, and_, delete, exists, func, inspect, or_, select, type_coerce
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Chunk, Paper, PaperCategory
@@ -170,6 +170,21 @@ class PgVectorStore(VectorStore):
             )
         if filters.sources is not None:
             stmt = stmt.where(Chunk.source.in_(filters.sources))
+        if filters.sections is not None:
+            # A disjunction of pairs, not a filter on the ordinal alone: ordinals
+            # restart at zero in every document, so `IN (3, 7)` would match two
+            # unrelated sections in two different books.
+            stmt = stmt.where(
+                or_(
+                    *(
+                        and_(
+                            Chunk.paper_id == paper_id,
+                            Chunk.section_ordinal == ordinal,
+                        )
+                        for paper_id, ordinal in filters.sections
+                    )
+                )
+            )
         if min_score is not None:
             # WHERE, not HAVING: there is no GROUP BY, so HAVING makes
             # PostgreSQL reject the whole statement ("chunk_id must appear in the

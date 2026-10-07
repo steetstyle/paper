@@ -241,6 +241,443 @@ takes `?q=` plus `?project=` and `?arxiv_id=` for the same scope rules as
 semantic search. For a meaning-based search restricted to formulas, use
 `POST /api/v1/search/semantic` with `"content_kinds": ["equation"]`.
 
+## Documents: books, notes, your own PDFs
+
+`paper ingest` takes a path as well as an arXiv id. The file goes through the
+same pipeline into the same embedding space, so it is searched *together* with
+the papers rather than beside them:
+
+```bash
+paper ingest ~/books/solid-state.pdf --kind book --title "Solid State Basics"
+paper ingest ~/notes/lecture-03.pdf  --kind notes --language tr --method ocr
+paper ingest ~/books/superconductivity.pdf --pages 40-52   # one range of a big book
+```
+
+Results come back with where in the source they came from:
+
+```
+1. The Oxford Solid State Basics solid-state-basics/book score=0.6881 equation
+  p.29  § 2.2.4 Some Shortcomings of the Debye Theory
+```
+
+`paper outline <doc_key>` prints the whole table of contents with page ranges and
+marks each row `pdf` (from the document's own bookmarks) or `text` (recovered from
+the extracted text). `paper show <doc_key>` works for documents too — an
+unresolvable handle is still an error, but a `doc_key` resolves like an arXiv id
+does.
+
+### How a local file differs, and how it does not
+
+`papers.arxiv_id` is nullable and `papers.doc_key` is the handle everything
+resolves through, so there is one lookup path instead of two. `kind` is what a
+reader cares about — is this a preprint or my lecture notes — and what the CLI and
+API group by. There is no second metadata type and no second pipeline: the only
+differences are where the bytes come from and what identifies them.
+
+The optional arXiv fields are optional because the corpus genuinely holds both. A
+file's embedded `/Info` dictionary is stored verbatim and *then* filtered, because
+the decision needs the evidence: on the three textbooks this was built for,
+`/Title` was `Modern Condensed Matter Physics` for one, absent for another, and
+`pethick.dvi` for the third — a LaTeX job name, which is why a value ending in a
+source extension or restating the filename is refused in favour of the filename.
+
+The `/Title` lookup is worth a note, because it failed in exactly the way a
+convenient abstraction hides. The dictionary is stored **verbatim, slash and
+all** so the decision can be made on the original string — and the code that made
+the decision then looked up a plain `title`, found nothing, and every PDF fell
+through to a title built from its filename. Annett arrived as
+`Superconductivity Superfluids And Condensates 685m5mne1x`. The tests passed
+throughout, because the tests passed a hand-written dict with the key they
+assumed rather than the key the reader produces. Both spellings are now accepted,
+and the tests use `/Title`.
+
+Deduplication is a check `ingest_file` performs, not a unique index on the file
+hash. The same book may legitimately be ingested twice — after a failed run, or as
+a second copy under another name — and a constraint would make `--force`
+impossible.
+
+### Measured against four real books
+
+| book | pages | bookmarks | `/Title` | outcome |
+|---|---|---|---|---|
+| Girvin, *Modern Condensed Matter Physics* | 721 | 341 | good | outline is the spine |
+| Oxford, *Solid State Basics* | 305 | 174 | good | outline is the spine |
+| Pethick, *Superconductivity* | 578 | **0** | `pethick.dvi` | markdown is the spine |
+| Annett, *Superfluids and Condensates* | 140 | **0** | good | markdown is the spine |
+
+All four ingested end to end:
+
+| doc_key | pages | chunks | with a page | sections | with a section |
+|---|---|---|---|---|---|
+| `annett-superfluids` | 140 | 103 | **103** | 55 | **103** |
+| `solid-state-basics` | 305 (of 20-44) | 37 | **37** | 195 | **37** |
+| `superconductivity` | 578 (of 40-52) | 12 | **12** | 7 | 10 |
+
+Annett is the interesting one: a 140-page physics text with no bookmarks at all,
+whose chapter and section structure was recovered entirely from the extracted
+text — `1 Superconductivity` p4-33, `1.11 Exercises` p24-33, `2.14 Exercises`
+p65-74, and so on through all 55 sections.
+
+Those four books drove the design:
+
+**Neither source of structure is authoritative, so neither is a fallback.** Two
+of the four have no bookmarks at all. Where bookmarks exist they are the spine,
+because they are the publisher's own ordered, paged table of contents; headings
+the extraction found are attached underneath. Where bookmarks do not exist, the
+markdown headings are the spine, in document order. `source` records which, per
+row, because the two disagree often enough that a reader deserves to know.
+
+**Depth cannot come from `#` count.** MinerU writes `#` for a chapter and a
+subsection alike, so ATX depth is flat and useless. Depth is read from the
+heading's own numbering — `2.3.1` is level 3 — including the parenthesised form a
+physics textbook uses, `(2.2) Debye Theory I`. Unnumbered headings inherit the
+level of the numbered heading before them, which is a guess and is recorded as
+one.
+
+**A contents page is a list of headings, and the extractor reads it as headings.**
+Annett's table of contents produced `2 The Ginzburg-Landau model 31` alongside the
+real `2 The Ginzburg-Landau model`. A heading is dropped only when *another*
+heading has exactly its title minus the trailing number — 3 real matches on
+Annett, **0** false positives on the other three. The third contents line survived
+because MinerU never emitted the clean counterpart, and dropping it would have
+been a guess rather than a detection.
+
+**Section titles have to be folded before they can be compared.** The bookmarks
+say `2.3 Appendix to this Chapter: ζ(4)`; the extraction says `2.3 Appendix to
+this Chapter: $\zeta ( 4 )$`. Numbering prefixes, punctuation and Greek letters
+are all folded for the identity comparison — and only there, since folding that
+hard would merge distinct titles when locating text.
+
+### Pages, measured rather than assumed
+
+MinerU writes `content_list.json` with a `page_idx` per block, and the chunker was
+throwing it away. `chunks.page_start`/`page_end` now come from matching each chunk
+back to those blocks: the blocks are joined into one string and each chunk is
+located by its opening words, searching forward only. Two findings worth keeping:
+
+* **`page_idx` is relative to the extracted slice, not to the book.** `mineru -s
+  100 -e 104` returns indexes `0..4` for pages `101..105`, so a real page number
+  is `range.start + page_idx`. Reading the index as absolute misplaces every chunk
+  of a partial ingest by up to a hundred pages.
+* **`-s`/`-e` are 0-based** while every page number shown to a user is 1-based, so
+  the CLI subtracts one. Getting this wrong is off-by-one on every chunk and
+  nobody notices.
+
+A page range also forces the CLI extraction backend. The in-process
+`do_parse` takes the whole file and has no page-range parameter at all, so a
+backend that cannot honour a range is skipped rather than allowed to return the
+entire book under a label claiming a range — which is exactly what happened before
+this was tracked, and it left a row claiming `pages 20-44` holding text from all
+305. On the 25-page slice used for that measurement, markdown went from 876 KB to
+79 KB and chunks from 465 to 37.
+
+Chunk-to-block matching hit **103 of 103 chunks** on a whole 140-page book, and
+**37 of 37** / **12 of 12** on the two partial slices. Two things had to be fixed to get there, both found by
+measuring: the joined blocks had two spaces between them where the chunk text had
+one, and a chunk opening with `![](images/…)` — a figure, or a bare chapter
+number — has no opening words to search for, so the search slides forward instead
+of giving up. A chunk whose text genuinely cannot be located inherits the previous
+chunk's page, because chunks are consecutive slices of one document; it never gets
+a guessed page, and `page_start` stays `NULL` rather than pointing somewhere wrong.
+
+### What a partial ingest does and does not mean
+
+`--pages` records the range on the source row and ingests only that slice, but the
+**outline is the whole book's**. A reader asking "what is chapter 9?" should not be
+told it does not exist because only chapters 1-2 were indexed, so `document_sections`
+covers the document while `paper outline --after N` narrows to what was indexed.
+Chunks only ever link to sections whose pages overlap the extraction.
+
+### Per-document extraction overrides
+
+`--language`, `--method` and `--ocr-language` are per run, not per process. A
+corpus of papers and textbooks cannot be served by one set of global settings: a
+Turkish lecture-notes PDF that needs OCR and an English textbook with a text layer
+belong in the same corpus, and only the former has any use for `--method ocr`.
+
+### Two things that do not work yet
+
+**Cropped images from a PDF run.** The block list, captions, page numbers and
+bounding boxes all reach `paper_figures`/`paper_tables`/`paper_equations` — and
+they never did before, because the extractor deletes its scratch directory before
+the asset step read `content_list.json`. Every asset row in the live corpus was
+from HTML; the first PDF run now produces figures, tables and equations. But
+`figures_with_image` is 0: the cropped PNGs are deleted with the directory, so a
+figure keeps its caption, page and box and has no image file. A degraded asset
+beats a missing one, and this is the one gap left in the PDF path.
+
+**Cropped images are also why nothing here was verified on a scanned PDF.** All
+three test books have a text layer. The OCR path is wired and reachable through
+`--method ocr`, but it has not been run against a real scan, so treat its output
+as untested rather than as working.
+
+## Reading a book by section
+
+A document is addressed by name — its slug, or an arXiv id — and nothing inside it
+is addressable. To a search engine a 305-page textbook is 37 chunks, so "the part
+about the Debye calculation" has to be said in words and hoped for. Four commands
+hand the corpus's own structure back as an address:
+
+```bash
+paper outline solid-state-basics                    # what is in it, with pages
+paper section solid-state-basics 2.2                # the section, whole, in order
+paper section solid-state-basics 2.2 --with-subsections
+paper ask "how does the Debye model estimate heat capacity?" --by-section
+paper ask "how many vibrational modes does each atom get?" \
+    --section 2.2 --in solid-state-basics
+```
+
+### The map, and the text under it
+
+`outline` is the table of contents, whole, each heading with the pages it spans
+and where it came from — `pdf` for the document's own bookmarks, `text` for
+headings the extraction recovered. Seven of one book's 195:
+
+```
+$ paper outline solid-state-basics
+Solid State Basics solid-state-basics
+                                                           pages    src   chunks
+...
+1 Introduction                                             3-9      pdf   1
+2 Specific Heat of Solids: Boltzmann, Einstein, and Debye  34-120   pdf   0
+  2.1 Drude's Model                                        34-60    pdf   2
+    2.2 Debye's Calculation                                61-90    pdf   2
+    2.2.1 Periodic Debye Heat Capacity                     61-70    text  1
+  2.3 Phonons in Metals                                    91-120   text  1
+3 Phonons                                                  121-200  pdf   1
+...
+```
+
+The `chunks` column is the honest half of that table. Chapter 2 has a row and a
+**0**, which is not the same as having no row, and from the table alone a reader
+cannot tell those apart.
+
+`paper section` is the other half of `--section`: `ask` finds passages by meaning
+inside a section, `section` gives you the section itself, in document order, with
+the page each chunk came from. `--with-subsections` appends the headings nested
+inside it as structure rather than as text:
+
+```
+$ paper section solid-state-basics Debye
+    2.2 Debye's Calculation p61-90 · section 3 · from outline
+  p61 body
+Debye replaced the classical cutoff with the speed of sound.
+
+  p63 body
+Integrating the phonon density of states to three modes per atom.
+
+2 Specific Heat of Solids: Boltzmann, Einstein, and Debye p34-120 · section 1 · from outline
+  no text stored for this section — its pages (34-120) were never indexed
+
+    2.2.1 Periodic Debye Heat Capacity p61-70 · section 4 · from markdown
+  p67 body
+The boundary condition quantises the lattice in one dimension.
+```
+
+`--by-section` answers the question a list of chunks cannot: not *which sentences
+matched* but *where to read*. It groups the hits into the sections they fall in
+and prints each section's own span — wider than the pages that actually scored,
+which is the point, because a reader opens a book at the section:
+
+```
+$ paper ask "Debye phonon heat capacity vibrational modes per atom" --by-section -k 8
+space test | hashing-test | 64d
+
+pages    section                                 doc                 hits  best
+61-90        2.2 Debye's Calculation             solid-state-basics  2     0.6121
+121-200  3 Phonons                               solid-state-basics  1     0.6096
+91-120     2.3 Phonons in Metals                 solid-state-basics  1     0.4078
+34-60      2.1 Drude's Model                     solid-state-basics  2     0.4033
+3-9      1 Introduction                          solid-state-basics  1     0.3354
+61-70        2.2.1 Periodic Debye Heat Capacity  solid-state-basics  1     0.3212
+pages are the section's own range — where to read, not which sentences scored
+```
+
+Eight hits, six rows. Grouped by section and not by the page a chunk starts on:
+three hits from one section on three pages is three rows of noise where one row of
+`61-90` is the answer. A chunk that belongs to no heading keeps its own pages,
+merged into one range, because "page 250, no section" is more use than a row that
+says nothing.
+
+### Section content is chunks, not the page range
+
+The text under a heading is the chunks that point at it. The range is printed as a
+claim about where to start reading and never as a stand-in for text, because a
+section can span thirty pages of which the corpus holds two. This corpus holds
+**195** sections and **37** chunks for `solid-state-basics` — pages 20-44 of 305 —
+so 158 of its headings have no text at all, and a view that showed ranges as
+content would promise the whole book and deliver one page. Hence `p61-90` on the
+heading, which is what the structure says, and `p61`, `p63` on the chunks, which
+are facts.
+
+### Three matching rules, each for a case that occurred
+
+Both spellings a reader uses are accepted — the book's own numbering (`7`, `2.2`)
+and words from a title (`Debye`, `Abrikosov`) — and three rules decide what a name
+may match.
+
+**Word boundaries.** `Exercises` must not come back for `ex`. A substring match
+hands a reader a chapter they did not ask for, with total confidence and no way to
+tell it was a guess. Books also say `Exercises` in three different places, so a
+term matches on a word edge wherever in a title it sits.
+
+**Numbering is not a word search.** `2.2` finds `2.2 Debye's Calculation` and
+nothing else: not `2.2.1 Periodic Debye Heat Capacity`, which is a different
+section, and not `2.20 High-Temperature Limit`, which differs by a digit. Both are
+sections a reader would swear they had not asked for.
+
+**An order, because without one there is none.** `Debye` ranks `2.2 Debye's
+Calculation` above `2 Specific Heat of Solids: Boltzmann, Einstein, and Debye`,
+which merely mentions it — exact, then prefix, then contains, with level and then
+page breaking ties. Otherwise the corpus answers in whatever order the database
+happens to return, and the section example above prints its three matches in
+exactly the order a reader wants them: the section, then the chapter that only
+mentions it, then the subsection.
+
+Matching runs in Python rather than in SQL, which costs a scan over the section
+rows — a few thousand for a corpus of books — and buys a word boundary and a
+ranking without making them three dialects' problem: SQLite has no regex operator,
+`ILIKE` is Postgres-only, and `LIKE` is case-sensitive on Postgres.
+
+### An unresolved name is an error, not an empty result
+
+A filter that resolved to no section and was then applied anyway would print
+`no matches in space …`, which is indistinguishable from a question the corpus
+genuinely does not cover — and the reader would go looking for a gap in a book
+that is really a typo in a flag. So the name is resolved before the search runs,
+and a miss exits non-zero naming the command that lists the names that do exist:
+
+```
+$ paper ask "how do phonons carry heat?" --section "Fermi liquid" --in solid-state-basics
+no section matching 'Fermi liquid' in 'solid-state-basics'. Try a word from its title, or its number (2.2). `paper outline solid-state-basics` lists them.
+```
+
+### Containment is decided by page range, not by level
+
+`--with-subsections` is the one place the corpus has to say what is inside what,
+and the two structural sources disagree about depth in the same book. Measured on
+*Solid State Basics*: the PDF's bookmarks put `2.2 Debye's Calculation` at level 3,
+and the markdown read of the same book read `2.2.1 Periodic Debye Heat Capacity` as
+level 3 too. The child is therefore not deeper, and a level comparison finds no
+children for a section that visibly has one — while the pages agree, because
+`2.2.1` starts on page 61, inside 61-90.
+
+Pages are what a reader sees as containment, and both sources agree on pages even
+when they disagree on hierarchy, so the range decides and the level is only the
+fallback for a document with no pages at all. The scan also stops at the first
+section that leaves the range: `2.3 Phonons in Metals` starts on page 91, so it is
+a sibling, and everything after it belongs to something else.
+
+### An absence says which absence it is
+
+A document whose bookmarks and headings both yielded nothing has no table of
+contents, and the honest answer says so and exits non-zero rather than printing a
+header with no rows under it:
+
+```
+$ paper outline my-scanned-notes
+no structure recorded — this document has neither PDF bookmarks nor headings the extraction could read.
+```
+
+An arXiv paper ingested from HTML is the other kind of absence and gets the other
+answer: an HTML page has no pages to point at, so there is nothing to navigate to
+and the fix is to ingest the PDF.
+
+All four read, so all four work under `--read-only`.
+
+## Interrupted ingestion
+
+A run is marked `running` when it starts. If the process that owns it dies — a
+closed laptop, a killed shell, a dropped connection — nothing moves it on, and the
+row keeps claiming to be in progress forever. Measured on this corpus before any of
+the below existed: **40 unfinished rows**, 38 of them stuck in `running`, the
+oldest for over a day, two of them duplicate attempts at the same paper. Nothing in
+`list_ingest_runs` distinguished any of them from work genuinely in progress.
+
+### Closing them out
+
+```bash
+paper runs --reap                    # report
+paper runs --reap --hours 0.5        # a tighter bound
+paper runs --reap --apply            # actually close them
+```
+
+Liveness is read from the step records, not from a heartbeat column: every
+completed step is written to `pipeline_step_runs`, so a run whose newest step
+finished long ago has demonstrably stopped, whatever happened to it. A run with no
+step record at all falls back to its creation time, which is what caught a `pending`
+run that sat for 16 hours without ever starting.
+
+The bound is deliberately generous — six hours by default,
+`INGESTION__STALE_RUN_HOURS` — because the cost is asymmetric. A false positive
+costs a re-ingest, and a re-ingest reuses what is already stored, so it is minutes.
+A false *negative* is what produced the 38 in the first place.
+
+Reaped runs become `abandoned`, not `failed`. Nothing went wrong with the paper;
+the work stopped. That distinction decides the response: a failed run is worth
+reading the error for, an abandoned one only needs re-running.
+
+### Continuing one
+
+Re-running a target resumes it. The extracted markdown is stored as a first-class
+artefact — together with MinerU's block list, because the markdown alone carries no
+`page_idx`, and a resumed run without blocks would hand the rest of the pipeline a
+document with no pages and no sections — so a retry reloads instead of
+re-extracting.
+
+Measured on a 140-page book whose run was killed mid-extraction, then retried:
+
+| step | full `--force` | resumed |
+|---|---|---|
+| `extract_text` | **95 661 ms** | **18 ms** (`resumed: true`, 1502 blocks) |
+| `chunk_text` | 135 ms | 135 ms |
+| `build_sections` | 17 ms | 17 ms |
+| whole run | ~4 min | 67 s (61 s of it embedding) |
+
+103 of 103 chunks kept their page number and all 55 sections survived the resume.
+
+Three rules make that safe rather than merely fast:
+
+* **`--force` still re-extracts everything.** Resuming is the default because
+  re-running is the normal response to an interruption, not because the work can
+  be skipped on request.
+* **A lost blob falls back to extracting.** Continuing with nothing would be worse
+  than starting over.
+* **A paged document without a stored block list is not resumed.** Its markdown is
+  there, so resuming would look identical while quietly dropping every page number
+  and every section. A full extraction costs a few minutes once and self-heals;
+  resuming markdown-only would cost the provenance permanently and silently.
+
+The last one was not hypothetical: an already-ingested document was being refused
+as a duplicate before the pipeline ran at all, so a book whose run died could only
+be retried with `--force` — which discards the stored markdown and pays for MinerU
+again. Skipping is now only correct when the previous attempt actually finished:
+`SUCCEEDED` or `SKIPPED` skip; `RUNNING`, `PENDING`, `PARTIAL`, `FAILED` and
+`ABANDONED` all resume.
+
+### What reaping does not guess
+
+It never touches a run that has stepped recently, and it never reaps a run it
+cannot date. Three runs were deliberately left alone on this corpus: they had
+finished a step 29 minutes earlier, under any bound the tests accept.
+
+### Three bugs this work uncovered
+
+Each was invisible until a real run hit it, and each is now pinned by a test:
+
+* **Re-ingesting a document with `--force` failed outright.** The existing-row
+  lookup was by `arxiv_id`; a local document has none, so the upsert inserted and
+  hit the `doc_key` unique constraint, surfacing as a `PendingRollbackError`
+  wrapping the real violation. It only ever happened on the *second* ingest of the
+  same file.
+* **Recording the same content twice silently discarded new metadata.** The
+  derived block list was written on the first run and dropped on every later one,
+  because the markdown hash matched and the early return threw the new `meta` away.
+  Content-addressed fields cannot differ for the same hash, but `meta` gains keys.
+* **The block list was unreachable on a non-filesystem blob store.** It was
+  recorded by hash alone; the store's `open` is keyed on the URI, and it has an
+  in-memory implementation. Both are stored now.
+
 ## Content kinds
 
 Every chunk carries a `content_kind`, decided once by the chunker: `body`,
@@ -308,6 +745,84 @@ paper ingest 1706.03762v7 --force   # 25 chunks: 3 figure, 3 table, 3 equation
 paper show 1706.03762v7 --content figures
 ```
 
+## Choosing a device per operation
+
+CPU is the default for a reason worth stating: a long-lived server process pins
+the model's worth of VRAM otherwise, and single-query latency is CPU-bound anyway.
+Measured here, every idle `paper mcp` process held ~1.4 GB; six of them took 8.8 GB
+of an 11.6 GB card and left nothing for bulk work. `ST_DEVICE=cuda` remains the
+global opt-in.
+
+On top of that, **every embedding operation takes a `device`**:
+
+```bash
+paper ingest 2408.05245 --device cuda            # embedding for this run
+paper ingest book.pdf --extract-device cuda      # MinerU for this document
+paper reembed --space bge-large --device cuda    # the one worth it
+paper ask "debounce model" --device cuda
+```
+
+```bash
+curl -XPOST :8000/api/v1/search/semantic -d '{"query":"...","device":"cuda"}'   # 422 on a typo
+```
+
+`device` on `ingest_paper`, `ask_paper_corpus` and `reembed_space` over MCP.
+
+Two properties make this safe rather than surprising:
+
+* **One call's device does not leak into another's.** The provider cache is keyed
+  by `(space, device)`, because a loaded model belongs to the device it was loaded
+  on — keying on the space alone would hand the second device the first one's
+  encoder.
+* **A second device means a second copy of the weights.** That is the VRAM this
+  process avoids holding by default, which is why `device` is an explicit argument
+  rather than something that flips silently. Asking for `cuda` is asking for GPU
+  memory, and it happens only on the call that asked.
+
+The extraction device is separate on purpose: a scanned textbook wants the GPU for
+its layout models while its query embedding stays on CPU. `--extract-device`
+reaches `MinerU`, `--device` reaches the embedding model.
+
+**One rule, three doors.** `app/domain/devices.py` owns what a device string may
+say; the CLI, the HTTP layer and the MCP server are thin adapters over it. This was
+not the original shape — the two agents that built the HTTP and MCP halves each
+wrote their own parser, and the parity test failed on the first run over nothing
+but the wording of the accepted set. A caller told three different things will
+eventually send the string one of them rejects.
+
+Mistakes are refused at the argument, naming the valid set, rather than handed to
+torch: torch's own rejection of `"cud"` arrives only once the weights are being
+moved — after the model is loaded, and on a real model with the accelerator
+already half occupied.
+
+## Read-only mode
+
+```bash
+paper --read-only ask "what is in the corpus"     # works
+paper --read-only ingest 2408.05245               # refused, exit 3
+```
+
+For an agent or a shell that should be able to look but not touch. The promise is
+mechanical rather than a matter of which commands the caller remembered to avoid:
+13 commands are marked as writers, and a refused one exits `3` having changed
+nothing.
+
+The coverage is enforced rather than asserted. `tests/test_read_only.py` walks
+every command Typer exposes and requires each to be *either* decorated `@writes`
+or present in an explicit `READ_ONLY_COMMANDS` allowlist. A new command therefore
+fails a test until someone decides what it is, instead of quietly being allowed
+to write in a mode whose entire promise is that it will not. Marking by hand
+rather than inferring from the verb is deliberate: `runs` reads unless reaped,
+`kinds` reads unless asked to relabel.
+
+**This work found a route that failed on every call.** `POST
+/projects/{slug}/papers?ingest=true` rolls its session back and then touches the
+`Project` ORM attribute; a rollback expires every loaded instance, so that touch
+was an implicit refresh from a synchronous access point, and it raised
+`MissingGreenlet` — every single time, not intermittently, which is how it sat
+behind a green test suite. Found because a test written for an unrelated reason
+had to absorb the exception.
+
 ## Scoped search
 
 `paper ask` scopes by project, by paper, by content kind and by source, and the
@@ -338,7 +853,7 @@ nothing.
 
 ## The pipeline
 
-Ten independent steps, each with its own failure boundary and timing record
+Eleven independent steps, each with its own failure boundary and timing record
 (persisted to `pipeline_step_runs`):
 
 | # | Step | Output |
@@ -349,10 +864,11 @@ Ten independent steps, each with its own failure boundary and timing record
 | 4 | `extract_text` | markdown (`extract_text`) from HTML or MinerU |
 | 5 | `extract_references` | bibliography → `paper_references`, linked where possible |
 | 6 | `extract_assets` | figures, tables and equations from HTML or MinerU |
-| 7 | `chunk_text` | `chunks` rows with heading breadcrumbs and `content_kind` |
-| 8 | `embed_chunks` | vectors → `embeddings` rows |
-| 9 | `index_vectors` | vectors → vector store |
-| 10 | `finalize` | stamps `ingested_at` |
+| 7 | `chunk_text` | `chunks` rows with heading breadcrumbs, `content_kind` and page numbers |
+| 8 | `build_sections` | `document_sections` rows; each chunk points at the one it sits in |
+| 9 | `embed_chunks` | vectors → `embeddings` rows |
+| 10 | `index_vectors` | vectors → vector store |
+| 11 | `finalize` | stamps `ingested_at` |
 
 Every step degrades instead of failing. MinerU unavailable or a PDF unreadable →
 step 4 falls back to `abstract_only` and the run is `partial`. No machine-readable
@@ -531,7 +1047,10 @@ paper mcp --http --port 8080        # streamable HTTP
 | `list_categories` | no | Every subject category in the corpus, with paper counts |
 | `list_authors` | no | Most prolific authors; pass `name` to resolve one and list their papers |
 | `most_cited_references` | no | Corpus papers ranked by how often the corpus cites them |
-| `list_ingest_runs` | no | Ingestion history with status and failed steps |
+| `list_ingest_runs` | no | Ingestion history with status and failed steps; `stale=true` lists only abandoned runs |
+| `reap_ingest_runs` | **yes** | Close runs whose owning process is gone, so a list of runs stops reporting work that will never finish |
+| `list_documents` | no | Local files in the corpus: kind, page count, chunks, indexed pages |
+| `read_sections` | no | One document's table of contents with page ranges and chunk counts |
 | `set_paper_read` | **yes** | Toggle read state in a project, one paper or all |
 | `delete_project` | **yes** (destructive) | Remove a reading list; the papers are kept |
 | `reembed_space` | **yes** | Embed already-stored chunks into another space (no network) |
@@ -539,7 +1058,8 @@ paper mcp --http --port 8080        # streamable HTTP
 
 Plus the `paper://{arxiv_id}` and `corpus://spaces` resources.
 
-Every CLI command has a tool equivalent, and so does every read-only HTTP route.
+27 tools: 19 read-only, 7 writing, 1 destructive. Every CLI command has a tool
+equivalent, and so does every read-only HTTP route.
 `delete_project` is the only tool annotated `destructive_hint`: the other writes
 are idempotent, because re-ingesting or re-embedding *replaces* rather than
 accumulates. That distinction is what lets a client auto-approve the cheap calls
@@ -952,18 +1472,26 @@ make check                  # ruff + mypy + pytest
 pytest --cov=app
 ```
 
-688 tests (+23 skipped), up from 505; `ruff` and `mypy` are clean. ArXiv, the
+1092 tests pass (+23 skipped), up from 505; `ruff` and `mypy` are clean. ArXiv, the
 HTML/PDF CDNs, MinerU, the embedding provider and the vector store are all faked,
-so the suite is deterministic and the end-to-end pipeline test drives all ten
-steps against a real SQLite database.
+so the suite is deterministic and the end-to-end pipeline test drives all eleven
+steps against a real SQLite database. Five more fail right now, all of them
+outside the section commands: three in `test_documents.py` on the
+markdown-is-the-spine cases and two in `test_scope_search.py` on the MCP `kind`
+field — work in flight elsewhere in the tree, reproduced without this section's
+suite.
 
-Three suites are worth knowing about because each answers a question the fakes
-cannot:
+Seven suites are worth knowing about — six answer a question the fakes cannot,
+and the last one answers a question only a rendered terminal can:
 
 | Suite | What only a real dependency can answer |
 |---|---|
 | `test_filter_parity.py` | Drives the CLI, HTTP API and MCP server with one filter and asserts byte-identical `search_query` output, so the three cannot drift apart |
+| `test_documents.py` | Pins the measurements behind the document layer: `page_idx` is slice-relative, `/Title` is slash-spelled, `-s`/`-e` are 0-based, and a contents line is not a section. Each has a citation in the comment saying which book it came from |
 | `test_mineru_integration.py` | Asserts against the **real** MinerU package that the resolved `do_parse` / `doc_analyze` signatures still match what we call |
+| `test_runs_recovery.py` | What happens after a process dies: that a dead run is found and closed, that a retry reloads the stored markdown instead of re-extracting, and that it does *not* resume when resuming would quietly drop pages and sections |
+| `test_read_only.py`, `test_mcp_device.py`, `test_api_device.py` | That read-only mode covers *every* command rather than the ones someone remembered, and that the CLI, HTTP and MCP accept the same device strings — the parity assertion failed on its first run |
+| `test_cli_sections.py` | Drives `outline`, `section`, `ask --section` and `ask --by-section` through `CliRunner` and asserts on what is *rendered*: the heading's pages beside the chunk's, one row per section rather than per chunk, and that an unresolved section name exits non-zero instead of printing `no matches` — which is otherwise indistinguishable from a topic the corpus does not cover |
 | `test_pgvector_store.py`, `test_migrations.py` | Run the real Alembic chain and a real `vector` scan |
 
 The last two need PostgreSQL and skip without it:

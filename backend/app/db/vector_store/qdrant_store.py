@@ -157,6 +157,22 @@ def _build_qdrant_filter(filters: VectorFilter) -> Any:  # noqa: ANN401
         )
     if filters.sources is not None:
         conditions.append(FieldCondition(key="source", match=MatchAny(any=list(filters.sources))))
+    if filters.sections is not None:
+        # A nested disjunction per section, because the identity is the pair.
+        # Qdrant's MatchAny is a plain "value in list" and cannot express
+        # "this ordinal *of that paper*", which is what a section is.
+        from qdrant_client.models import Filter as QFilter  # noqa: PLC0415
+        from qdrant_client.models import MatchValue as QMatch  # noqa: PLC0415
+
+        conditions.append(
+            QFilter(
+                should=[
+                    QFilter(must=[QMatch(key="paper_id", value=paper_id),
+                                  QMatch(key="section_ordinal", value=ordinal)])
+                    for paper_id, ordinal in filters.sections
+                ]
+            )
+        )
     for key, value in filters.extra.items():
         conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
     return Filter(must=conditions) if conditions else None

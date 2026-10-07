@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
+import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, TypeVar, cast
 
 import typer
 from rich.console import Console
@@ -28,6 +31,9 @@ from rich.table import Table
 
 from app import __version__
 from app.config import get_settings, reload_settings
+from app.db.models import Paper
+from app.domain.enums import RunStatus
+from app.domain.models import MineruOptions, PageRange
 from app.logging import configure_logging, get_logger
 
 app = typer.Typer(
@@ -39,14 +45,35 @@ app = typer.Typer(
 console = Console()
 logger = get_logger("paper.cli")
 
-arxiv_app = typer.Typer(help="Search ArXiv metadata.", no_args_is_help=True)
+F = TypeVar("F", bound=Callable[..., Any])
+
 db_app = typer.Typer(help="Database utilities.", no_args_is_help=True)
 spaces_app = typer.Typer(help="Embedding spaces (one model, one table).", no_args_is_help=True)
 projects_app = typer.Typer(help="Projects: named collections over the global corpus.", no_args_is_help=True)
 app.add_typer(projects_app, name="projects")
-app.add_typer(arxiv_app, name="arxiv")
 app.add_typer(db_app, name="db")
 app.add_typer(spaces_app, name="spaces")
+
+
+@app.callback()
+def _global_options(
+    ctx: typer.Context,
+    read_only: Annotated[
+        bool,
+        typer.Option(
+            "--read-only",
+            help=(
+                "Refuse every command that writes. For an agent or a shell that "
+                "should be able to look but not touch: the corpus, the database "
+                "and the blob store all stay as they are, and a refused command "
+                "exits 3 having changed nothing."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """ArXiv AI assistant: search, ingest, extract and retrieve."""
+    read_mode(read_only)
+    ctx.obj = {"read_only": read_only}
 
 
 # --------------------------------------------------------------------- helpers
@@ -87,6 +114,132 @@ def _paper_dict(paper) -> dict[str, object]:  # noqa: ANN001 - PaperMetadata
 
 
 # ------------------------------------------------------------------------ search
+#: Set by ``--read-only``. Process-wide because the guard is process-wide: the
+#: point of the mode is that *this invocation of the CLI* cannot change anything,
+#: and a flag threaded through every command would be one someone forgets to pass.
+_READ_ONLY = False
+
+
+def read_mode(enabled: bool) -> None:
+    """Enable or clear read-only mode. Called by the global ``--read-only`` flag."""
+    global _READ_ONLY  # noqa: PLW0603 - one process, one mode, set once at startup
+    _READ_ONLY = enabled
+
+
+def is_read_only() -> bool:
+    return _READ_ONLY
+
+
+def writes_when(command: str, *flags: str) -> Callable[[F], F]:
+    """Mark a command as writing only when one of ``flags`` is set.
+
+    For the commands that read by default and change only when asked twice —
+    ``paper runs --reap`` reports and ``--apply`` closes, ``paper sections --prune``
+    reports and ``--apply`` deletes. Marking the whole command as a writer would
+    refuse the report, which is the part that is safe; marking it as a reader
+    would let ``--read-only … --apply`` through, which breaks the one promise the
+    mode makes.
+
+    The first positional argument is the Typer parameter name, not the flag: the
+    function is called with its arguments already bound, so there is no parsing to
+    do and no way for the flag and the parameter to disagree.
+    """
+
+    def decorate(function: F) -> F:
+        @functools.wraps(function)
+        def guarded(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            if _READ_ONLY and any(bool(kwargs.get(flag)) for flag in flags):
+                _refuse(f"{command} --{'/--'.join(flags)}")
+            return function(*args, **kwargs)
+
+        guarded._writes_command = command  # type: ignore[attr-defined]
+        guarded._writes_flags = flags  # type: ignore[attr-defined]
+        guarded._read_only_guarded = True  # type: ignore[attr-defined]
+        return cast("F", guarded)
+
+    return decorate
+
+
+def writes(command: str) -> Callable[[F], F]:
+    """Mark a command as one that changes something, and refuse it in read mode.
+
+    The marker is what makes the completeness test possible: ``tests/test_read_only``
+    walks every command Typer exposes and asserts it is *either* decorated or in
+    the read-only allowlist. A new command therefore cannot ship unguarded — it
+    fails a test instead of quietly being allowed to write in a mode whose entire
+    promise is that it will not.
+
+    Marking by hand rather than inferring from the name is deliberate: ``show``,
+    ``search`` and ``doctor`` read, ``runs`` reads unless reaped, and ``kinds``
+    reads unless it is asked to relabel. The verbs do not decide; the behaviour
+    does.
+    """
+
+    def decorate(function: F) -> F:
+        if getattr(function, "_writes_command", None) is not None:  # pragma: no cover
+            msg = f"{command} is already marked as writing"
+            raise ValueError(msg)
+        function._writes_command = command  # type: ignore[attr-defined]
+        # Empty tuple = "always writes". A non-empty one names the flags that make
+        # it write, which is what lets a report-then-apply command live in the
+        # read-only allowlist without lying. See :func:`writes_when`.
+        function._writes_flags = ()  # type: ignore[attr-defined]
+        if not getattr(function, "_read_only_guarded", False):
+
+            @functools.wraps(function)
+            def guarded(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+                if _READ_ONLY:
+                    _refuse(command)
+                return function(*args, **kwargs)
+
+            guarded._writes_command = command  # type: ignore[attr-defined]
+            guarded._writes_flags = ()  # type: ignore[attr-defined]
+            guarded._read_only_guarded = True  # type: ignore[attr-defined]
+            return cast("F", guarded)
+        return function
+
+    return decorate
+
+
+def _refuse(command: str) -> None:
+    """Say no, say why, and exit with the code a caller can branch on."""
+    console.print(
+        f"[red]read-only mode:[/red] [bold]{command}[/bold] changes the corpus and "
+        "was not run."
+    )
+    console.print(
+        "[dim]Drop --read-only to allow writes. Nothing was modified.[/dim]"
+    )
+    raise typer.Exit(code=3)
+
+
+#: Commands that change nothing. Everything Typer exposes must appear here or be
+#: decorated with :func:`writes`; the completeness test enforces it. Kept
+#: explicit rather than inferred so that adding a command is a decision.
+READ_ONLY_COMMANDS: frozenset[str] = frozenset({
+    "search",
+    "assets",
+    "ask",
+    "show",
+    "runs",
+    "outline",
+    "sections",
+    "section",
+    "doctor",
+    "config",
+    "version",
+    "session",
+    "mcp",
+    "serve",
+    "db:revision",
+    "spaces:list",
+    "spaces:sql",
+    "projects:list",
+    "projects:show",
+    "projects:refs",
+})
+
+
 @app.command()
 def search(
     filter_args: Annotated[
@@ -267,44 +420,337 @@ def search(
 
 # ---------------------------------------------------------------------- ingest
 @app.command()
+@writes("ingest")
 def ingest(
-    arxiv_id: Annotated[str, typer.Argument(help="ArXiv id, versioned id or URL.")],
+    target: Annotated[
+        str,
+        typer.Argument(
+            metavar="ID_OR_PATH",
+            help="ArXiv id, versioned id, URL, or a path to a local PDF.",
+        ),
+    ],
     pdf: Annotated[bool, typer.Option("--pdf", help="Skip HTML and use the PDF path.")] = False,
     force: Annotated[bool, typer.Option("--force", help="Re-download even if cached.")] = False,
     space: Annotated[
         str | None,
         typer.Option("--space", "-s", help="Embedding space to write. Default: active space."),
     ] = None,
+    embed_device: Annotated[
+        str | None,
+        typer.Option(
+            "--device",
+            help="Device for embedding: cpu, cuda, cuda:1, mps. Default: configured (cpu).",
+        ),
+    ] = None,
+    extract_device: Annotated[
+        str | None,
+        typer.Option(
+            "--extract-device",
+            help="Device for MinerU on this document: cpu, cuda, mps.",
+        ),
+    ] = None,
+    kind: Annotated[
+        str,
+        typer.Option(
+            "--kind",
+            "-k",
+            help="For a local file: paper, book, notes, report or thesis.",
+        ),
+    ] = "book",
+    doc_title: Annotated[
+        str | None,
+        typer.Option("--title", help="Override the title of a local document."),
+    ] = None,
+    doc_key: Annotated[
+        str | None,
+        typer.Option("--doc-key", help="Handle for a local document. Default: filename slug."),
+    ] = None,
+    pages: Annotated[
+        str | None,
+        typer.Option(
+            "--pages",
+            help="Only these 1-based pages, e.g. 40-52, 40, 40-, -52.",
+        ),
+    ] = None,
+    language: Annotated[
+        str | None,
+        typer.Option("--language", help="MinerU language hint for a local file, e.g. tr, en."),
+    ] = None,
+    method: Annotated[
+        str | None,
+        typer.Option("--method", help="MinerU parse method: auto, txt or ocr."),
+    ] = None,
+    ocr: Annotated[
+        str | None,
+        typer.Option("--ocr-language", help="PaddleOCR language, when it must differ."),
+    ] = None,
 ) -> None:
     """Run the full pipeline (fetch -> MinerU -> chunk -> embed) for one paper.
+
+    A path to a PDF ingests a local document instead: same pipeline, same
+    embedding space, addressed by a ``doc_key`` rather than an arXiv id.
 
     Adding a paper to a second space does not touch the first one's vectors:
     each space has its own table.
     """
+    is_file = Path(target).expanduser().is_file()
 
     async def run() -> int:
         from app.container import get_container
         from app.services.ingestion import build_ingestion_service
 
         container = get_container()
-        target = await _resolve(container, space)
-        await container.vector_store_for(target).ensure_ready()
-        service = build_ingestion_service(container, target)
+        active = await _resolve(container, space)
+        await container.vector_store_for(active).ensure_ready()
+        service = build_ingestion_service(container, active, device=_device(embed_device))
         try:
-            result = await service.ingest_paper(
-                arxiv_id, prefer_html=not pdf, force=force, requested_by="cli", trigger="cli"
-            )
+            if is_file:
+                result = await service.ingest_file(
+                    Path(target),
+                    kind=kind,
+                    title=doc_title,
+                    doc_key=doc_key,
+                    page_range=_page_range(pages),
+                    options=_mineru_options(language, method, ocr, _device(extract_device)),
+                    force=force,
+                    requested_by="cli",
+                    trigger="cli",
+                )
+            else:
+                result = await service.ingest_paper(
+                    target, prefer_html=not pdf, force=force,
+                    requested_by="cli", trigger="cli",
+                )
         finally:
             await container.aclose()
 
-        console.print(f"[dim]space:[/dim] {target.name} ({target.resolved_table})")
+        console.print(f"[dim]space:[/dim] {active.name} ({active.resolved_table})")
+        console.print(
+            f"[dim]embedding device:[/dim] {service.embedding_device}"
+            + (f" [dim]extraction device:[/dim] {extract_device}" if extract_device else "")
+        )
+        if is_file and result.status is RunStatus.SKIPPED:
+            for message in result.errors.values():
+                console.print(f"[yellow]{message}[/yellow]")
+                return 0
         _render_runs(result)
         return 0 if result.succeeded else 1
 
     raise typer.Exit(asyncio.run(run()))
 
 
+def _identity_block(paper: Paper) -> str:
+    """The header rows that describe what this row *is*.
+
+    Split by kind because a preprint and a textbook do not share fields: printing
+    ``id: None`` and an empty category list for every local document is what a
+    reader sees as a broken row rather than as a book.
+    """
+    if not paper.is_paper:
+        pages = f"pages     : {paper.page_count or 'unknown'}"
+        # The source is wherever the bytes came from, which for a local document
+        # is a path and is recorded on its raw document, not on the paper row.
+        source = next(
+            (doc.source_url for doc in paper.contents if doc.source_url),
+            "-",
+        )
+        # Long enough to break the panel across two lines, which turns one field
+        # into two misaligned rows. The tail is the informative end.
+        if len(source) > 58:
+            source = "…" + source[-57:]
+        return (
+            f"doc-key   : {paper.doc_key}\n"
+            f"kind      : {paper.kind}\n"
+            f"{pages}\n"
+            f"source    : {source}\n"
+        )
+    return (
+        f"id        : {paper.versioned_id}\n"
+        f"authors   : {', '.join(paper.author_names[:6])}\n"
+        f"categories: {', '.join(paper.categories)}\n"
+        f"published : {paper.published_at}\n"
+        f"html      : {paper.html_url or '-'}\n"
+        f"pdf       : {paper.pdf_url}\n"
+    )
+
+
+#: Shown for a hit that has no section. The backslash is not decoration: Rich reads
+#: a bare ``[...]`` as markup and renders it as nothing, so the unescaped version
+#: printed an empty column exactly where a label was wanted.
+NO_SECTION_LABEL = r"\[no section]"
+
+
+def _print_by_section(hits: list) -> int:  # noqa: ANN001 - list[SemanticSearchHit]
+    """Group hits into the sections and page ranges they fall in.
+
+    The question a list of chunks cannot answer. Ten scattered chunks from a
+    700-page book are ten places to look; "pages 24-31 of chapter 2" is one. The
+    group is the *section*, so the page range shown is the section's own — which is
+    wider than the pages that actually matched, and is the point: the reader wants
+    where to read, not which sentences scored highest.
+
+    Hits with no section keep their page, because "page 318, unknown section" is
+    still more use than a row that says nothing.
+    """
+    groups: dict[tuple, dict] = {}
+    for hit in hits:
+        meta = hit.metadata
+        # Grouped by section, not by page. Grouping by the page a chunk starts on
+        # put three hits from one section on three rows, which is the opposite of
+        # the answer this view exists to give.
+        key = (
+            meta.get("doc_key") or meta.get("display_id") or "",
+            meta.get("section_title") or "",
+        )
+        row = groups.setdefault(
+            key,
+            {
+                "doc": meta.get("doc_key") or meta.get("display_id") or "",
+                "title": meta.get("title") or "",
+                "section": meta.get("section_title") or "",
+                "level": meta.get("section_level") or 0,
+                "section_pages": (
+                    meta.get("section_page_start"),
+                    meta.get("section_page_end"),
+                ),
+                "pages": [],
+                "hits": 0,
+                "best": 0.0,
+            },
+        )
+        row["hits"] += 1
+        row["best"] = max(row["best"], hit.score)
+        start = meta.get("page_start")
+        end = meta.get("page_end")
+        if start is not None:
+            row["pages"].append((start, end if end is not None else start))
+
+    if not groups:
+        console.print("[yellow]no matches[/yellow]")
+        return 1
+
+    ordered = sorted(
+        groups.values(),
+        key=lambda r: (-float(r["best"]), r["doc"]),
+    )
+    table = Table(box=None, pad_edge=False)
+    for column, style in (
+        ("pages", "cyan"),
+        ("section", "bold"),
+        ("doc", "dim"),
+        ("hits", "dim"),
+        ("best", "magenta"),
+    ):
+        table.add_column(column, style=style)
+
+    for row in ordered:
+        section_start, section_end = row["section_pages"]
+        # The section's own span when it is known, since that is the range a
+        # reader would open the book at. Falls back to the pages that actually
+        # matched, which is all there is for a chunk with no section.
+        if section_start is not None:
+            spans = (
+                str(section_start)
+                if section_end in (None, section_start)
+                else f"{section_start}-{section_end}"
+            )
+        else:
+            spans = _merge_spans(row["pages"])
+        indent = "  " * max(0, int(row["level"]) - 1)
+        table.add_row(
+            spans,
+            # `\[`: Rich reads a bare `[...]` as a markup tag and renders it as
+            # nothing, so an unsectioned hit printed an empty column.
+            f"{indent}{row['section'] or NO_SECTION_LABEL}",
+            row["doc"],
+            str(row["hits"]),
+            f"{float(row['best']):.4f}",
+        )
+    console.print(table)
+    console.print(
+        "[dim]pages are the section's own range — where to read, not which "
+        "sentences scored[/dim]"
+    )
+    return 0
+
+
+def _merge_spans(pages: list[tuple[int, int]]) -> str:
+    """``[(24, 24), (26, 29), (31, 31)]`` -> ``24, 26-29, 31``.
+
+    Merging overlapping and adjacent pages matters because a section's chunks are
+    contiguous but hits are not: without it one section hit at pages 24, 25, 26
+    prints as three rows of noise instead of one range.
+    """
+    if not pages:
+        return "-"
+    ordered = sorted(pages)
+    merged: list[list[int]] = [list(ordered[0])]
+    for start, end in ordered[1:]:
+        last = merged[-1]
+        if start <= last[1] + 1:
+            last[1] = max(last[1], end)
+        else:
+            merged.append([start, end])
+    return ", ".join(str(s) if s == e else f"{s}-{e}" for s, e in merged)
+
+
+def _locator(metadata: dict[str, object]) -> str:
+    """``p.24 § 2.2 Debye's Calculation`` — page and section of a search hit.
+
+    Empty for an arXiv paper, which has neither. Both halves are optional and
+    shown independently, because a chunk can know its page without landing in a
+    section and the reverse.
+    """
+    parts: list[str] = []
+    page = metadata.get("page_start")
+    if page is not None:
+        end = metadata.get("page_end")
+        if end is not None and end != page:
+            parts.append(f"p.{page}-{end}")
+        else:
+            parts.append(f"p.{page}")
+    section = metadata.get("section_title")
+    if section:
+        parts.append(f"§ {section}")
+    return "  ".join(parts)
+
+
+def _page_range(value: str | None) -> PageRange | None:
+    """Parse ``--pages`` once, here, so a typo fails before the file is read."""
+    if not value:
+        return None
+    try:
+        return PageRange.parse(value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _mineru_options(
+    language: str | None,
+    method: str | None,
+    ocr_language: str | None,
+    device: str | None = None,
+) -> MineruOptions:
+    """Build per-document extraction overrides from the CLI flags.
+
+    Validated against what the CLI actually accepts rather than passed through:
+    MinerU's own error for an unknown language arrives minutes later, after a
+    model download, which is the worst possible time to learn that a flag was
+    misspelled.
+    """
+    if method is not None and method not in {"auto", "txt", "ocr"}:
+        raise typer.BadParameter(f"--method must be auto, txt or ocr, not {method!r}")
+    if language is not None and not re.fullmatch(r"[a-z]{2}(-[A-Za-z]+)?", language):
+        raise typer.BadParameter(
+            f"--language must look like 'en' or 'ch', not {language!r}"
+        )
+    return MineruOptions(
+        language=language, method=method, ocr_language=ocr_language, device=device
+    )
+
+
 @app.command()
+@writes("harvest")
 def harvest(
     filter_args: Annotated[
         list[str] | None,
@@ -453,6 +899,7 @@ def _print_project_papers(rows, *, title: str) -> None:  # noqa: ANN001
 
 
 @projects_app.command("new")
+@writes("projects:new")
 def projects_new(
     name: Annotated[str, typer.Argument(help="Human-readable project name.")],
     description: Annotated[str | None, typer.Option("--description", "-d")] = None,
@@ -546,6 +993,7 @@ def projects_list(
 
 
 @projects_app.command("add")
+@writes("projects:add")
 def projects_add(
     project: Annotated[str, typer.Argument(help="Project slug or name.")],
     paper_ids: Annotated[
@@ -690,6 +1138,7 @@ def projects_show(
 
 
 @projects_app.command("rm")
+@writes("projects:rm")
 def projects_rm(
     project: Annotated[str, typer.Argument(help="Project slug.")],
     paper_id: Annotated[
@@ -733,6 +1182,7 @@ def projects_rm(
 
 
 @projects_app.command("read")
+@writes("projects:read")
 def projects_read(
     project: Annotated[str, typer.Argument(help="Project slug.")],
     paper_id: Annotated[str | None, typer.Argument(help="Paper id; omit for all.")] = None,
@@ -782,13 +1232,18 @@ async def _paper_or_none(session, arxiv_id: str):  # noqa: ANN001, ANN202
     from app.db.repositories import PaperRepository
 
     papers = PaperRepository(session)
-    # get_by_arxiv_id normalises, so the versioned and bare forms both resolve.
-    return await papers.get_by_arxiv_id(arxiv_id)
+    # `resolve`, not `get_by_arxiv_id`: the argument may name a local document,
+    # which has no arXiv id at all. `resolve` also normalises, so the versioned
+    # and bare arXiv forms both still work.
+    return await papers.resolve(arxiv_id)
 
 
 @app.command()
 def assets(
-    arxiv_id: Annotated[str, typer.Argument(help="Paper to inspect.")],
+    arxiv_id: Annotated[
+        str,
+        typer.Argument(help="ArXiv id, versioned id, URL, or a document's doc_key."),
+    ],
     kind: Annotated[
         str, typer.Option("--kind", "-k", help="figures | tables | equations | all")
     ] = "all",
@@ -951,7 +1406,10 @@ def assets(
 # ---------------------------------------------------------------- references
 @projects_app.command("refs")
 def projects_refs(
-    arxiv_id: Annotated[str, typer.Argument(help="Paper to inspect.")],
+    arxiv_id: Annotated[
+        str,
+        typer.Argument(help="ArXiv id, versioned id, URL, or a document's doc_key."),
+    ],
     direction: Annotated[
         str, typer.Option("--direction", help="references (out) | cited-by (in)")
     ] = "references",
@@ -974,7 +1432,7 @@ def projects_refs(
         container = get_container()
         async with container.session_factory() as session:
             papers = PaperRepository(session)
-            paper = await papers.get_by_arxiv_id(arxiv_id)
+            paper = await papers.resolve(arxiv_id)
             if paper is None:
                 console.print(f"[yellow]{arxiv_id} is not in the corpus[/yellow]")
                 return 1
@@ -986,9 +1444,20 @@ def projects_refs(
                     {"cited_by": row.citing_paper_id, "ordinal": row.ordinal}
                     for row in rows
                 ]
-                papers_out = [
-                    {"arxiv_id": p.arxiv_id, "title": p.title} for p in citing
+                # `display_id` so a local document in a project prints its slug
+                # rather than `None`.
+                # `display_id` so a local document in a project prints its slug
+                # rather than `None`. Typed `dict[str, str]` because every field
+                # here is display text, not an optional column.
+                papers_out: list[dict[str, str]] = [
+                    {
+                        "display_id": p.display_id,
+                        "arxiv_id": p.arxiv_id or "",
+                        "title": p.title,
+                    }
+                    for p in citing
                 ]
+                del data
             else:
                 rows = await refs.list_references(
                     paper.id, limit=limit, resolved_only=resolved_only
@@ -1049,7 +1518,9 @@ def projects_refs(
             console.print(table)
         if incoming:
             for entry in papers_out:
-                console.print(f"  [cyan]{entry['arxiv_id']}[/cyan] {entry['title'][:60]}")
+                console.print(
+                    f"  [cyan]{entry['display_id']}[/cyan] {entry['title'][:60]}"
+                )
         if not rows:
             console.print(
                 "[yellow]none recorded[/yellow] — references are extracted from the "
@@ -1072,6 +1543,39 @@ def ask(
     top_k: Annotated[int, typer.Option("--top-k", "-k", min=1, max=50)] = 8,
     category: Annotated[str | None, typer.Option("--category", "-c")] = None,
     space: Annotated[str | None, typer.Option("--space", "-s")] = None,
+    device: Annotated[
+        str | None,
+        typer.Option(
+            "--device",
+            help="Embedding device: cpu, cuda, cuda:1, mps. One query is faster "
+            "on CPU; this is here for parity, not speed.",
+        ),
+    ] = None,
+    section: Annotated[
+        str | None,
+        typer.Option(
+            "--section",
+            "-S",
+            help="Only this section: a book's numbering (2.2) or words (Debye). "
+            "Repeatable? No — all matches are included.",
+        ),
+    ] = None,
+    within: Annotated[
+        str | None,
+        typer.Option(
+            "--in",
+            help="Restrict --section to one document (its doc_key). Without this, "
+            "a section name is matched across the whole corpus.",
+        ),
+    ] = None,
+    by_section: Annotated[
+        bool,
+        typer.Option(
+            "--by-section",
+            help="Group the hits into the sections and page ranges they fall in, "
+            "instead of listing chunks. This is the 'which pages cover this?' view.",
+        ),
+    ] = False,
     show_text: Annotated[bool, typer.Option("--text")] = False,
     project: Annotated[
         str | None,
@@ -1105,10 +1609,17 @@ def ask(
         typer.Option("--min-score", min=0.0, max=1.0, help="Drop hits below this cosine score."),
     ] = None,
 ) -> None:
-    """Semantic search, scoped by project, by paper, by content kind and by source."""
+    """Semantic search, scoped by project, paper, kind, source or section.
+
+    `--section` narrows to a part of a document before ranking, so `top_k` is
+    `top_k` matches *from that section* rather than the section's best matches out
+    of a corpus-wide top-k. `--by-section` answers the other question: not "which
+    chunks match" but "which pages of which sections cover this".
+    """
 
     async def run() -> int:
         from app.container import get_container
+        from app.services.sections_query import find_sections
         from app.services.semantic_search import SemanticSearchService
 
         try:
@@ -1122,10 +1633,28 @@ def ask(
         store = container.vector_store_for(target)
         service = SemanticSearchService(
             vector_store=store,
-            embeddings=container.provider_for(target),
+            embeddings=container.provider_for(target, _device(device)),
             session_factory=container.session_factory,
             space=target,
         )
+
+        section_keys: list[tuple[str, int]] | None = None
+        matched: list = []
+        if section:
+            async with container.session_factory() as session:
+                matched = await find_sections(
+                    session, section, doc_keys=[within] if within else None
+                )
+            if not matched:
+                where = f" in {within!r}" if within else " in the corpus"
+                console.print(
+                    f"[yellow]no section matching {section!r}{where}.[/yellow] "
+                    f"Try a word from its title, or its number (2.2). "
+                    f"`paper outline {within or '<doc_key>'}` lists them."
+                )
+                return 1
+            section_keys = [item.key for item in matched]
+
         try:
             hits = await service.search(
                 question,
@@ -1136,6 +1665,7 @@ def ask(
                 paper_ids=list(paper) if paper else None,
                 sources=srcs,
                 min_score=min_score,
+                sections=section_keys,
             )
         except LookupError as exc:
             # e.g. an unknown project slug. HTTP answers 404 and MCP a structured
@@ -1149,9 +1679,14 @@ def ask(
                 f"[dim]project {scope['project']!r} | {scope['project_papers']} papers[/dim]"
             )
         if scope.get("content_kinds"):
-            console.print(f"[dim]content {'+'.join(scope['content_kinds'])}[/dim]\n")
-        else:
-            console.print()
+            console.print(f"[dim]content {'+'.join(scope['content_kinds'])}[/dim]")
+        if section_keys:
+            console.print(
+                "[dim]section:[/dim] "
+                + ", ".join(f"{item.title} [dim](p{item.pages})[/dim]" for item in matched[:6])
+                + (f" [dim]+{len(matched) - 6} more[/dim]" if len(matched) > 6 else "")
+            )
+        console.print()
         if not hits:
             console.print(
                 f"[yellow]no matches in space {target.name!r}"
@@ -1159,17 +1694,34 @@ def ask(
                 "[/yellow]"
             )
             return 1
+        if by_section:
+            return _print_by_section(hits)
         for rank, hit in enumerate(hits, start=1):
             metadata = hit.metadata
+            # `display_id` and not `arxiv_id`: a textbook has no arXiv id, and
+            # printing an empty column beside every book result reads as missing
+            # data rather than as "this is not a preprint".
             header = (
-                f"[bold]{rank}. {metadata.get('title', 'unknown')}[/bold] "
-                f"[cyan]{metadata.get('arxiv_id', '')}[/cyan] "
+                f"[bold]{rank}. {metadata.get('title') or metadata.get('display_id', 'unknown')}[/bold] "
+                f"[cyan]{metadata.get('display_id') or ''}[/cyan]"
+                f"[dim]{'/' + metadata['kind'] if metadata.get('kind') and metadata['kind'] != 'paper' else ''}[/dim] "
                 f"[magenta]score={hit.score:.4f}[/magenta]"
             )
             if metadata.get("content_kind"):
                 header += f" [green]{metadata['content_kind']}[/green]"
             console.print(header)
-            if metadata.get("heading"):
+            # Where in the source the passage is: the two things a reader needs to
+            # open a book and find it, and the reason a document is worth having
+            # in the corpus next to the papers.
+            locator = _locator(metadata)
+            if locator:
+                console.print(f"  [dim]{locator}[/dim]")
+            elif metadata.get("heading"):
+                # Only as a fallback. The chunker's heading comes from the
+                # extracted markdown, which in a book carries both a shallower
+                # and a contradictory name for the same passage — showing it
+                # beside the document's own section would put two different
+                # claims on one line.
                 console.print(f"  [dim]§ {metadata['heading']}[/dim]")
             if show_text:
                 console.print(f"  {hit.text[:400]}…")
@@ -1197,7 +1749,7 @@ def show(
     """Show what is stored locally for a paper."""
 
     async def run() -> int:
-        from app.db.repositories import ChunkRepository, PaperRepository
+        from app.db.repositories import ChunkRepository, PaperRepository, SectionRepository
         from app.db.session import get_session_factory
 
         try:
@@ -1208,7 +1760,7 @@ def show(
 
         factory = get_session_factory()
         async with factory() as session:
-            paper = await PaperRepository(session).get_by_arxiv_id(arxiv_id)
+            paper = await PaperRepository(session).resolve(arxiv_id)
             if paper is None:
                 console.print(f"[yellow]{arxiv_id} is not ingested[/yellow]")
                 return 1
@@ -1218,19 +1770,24 @@ def show(
                 paper.id, limit=chunks or None, content_kinds=kinds
             )
             total = await chunks_repo.count(paper.id, content_kinds=kinds)
+            sections = await SectionRepository(session).list_for_paper(paper.id)
+            matching = (
+                f" of {await chunks_repo.count(paper.id)} matching {'+'.join(kinds)}"
+                if kinds
+                else ""
+            )
+            section_row = f"sections  : {len(sections)}\n" if sections else ""
             body = (
                 f"[bold]{paper.title}[/bold]\n\n"
-                f"id         : {paper.versioned_id}\n"
-                f"authors    : {', '.join(paper.author_names[:6])}\n"
-                f"categories : {', '.join(paper.categories)}\n"
-                f"published  : {paper.published_at}\n"
-                f"ingested   : {paper.ingested_at}\n"
-                f"html       : {paper.html_url or '-'}\n"
-                f"pdf        : {paper.pdf_url}\n"
-                f"chunks     : {total}"
-                f"{' of ' + str(await chunks_repo.count(paper.id)) + ' matching ' + '+'.join(kinds) if kinds else ''}"
+                f"{_identity_block(paper)}"
+                f"ingested  : {paper.ingested_at}\n"
+                f"chunks    : {total}{matching}\n"
+                f"{section_row}"
             )
-            console.print(Panel(body, title="paper", border_style="cyan"))
+            console.print(
+                Panel(body, title=paper.kind if paper.kind != "paper" else "paper",
+                      border_style="cyan")
+            )
             for row in rows:
                 console.print(
                     f"\n[cyan]#{row.ordinal}[/cyan] [dim]{row.heading or ''}[/dim]"
@@ -1242,6 +1799,383 @@ def show(
         return 0
 
     raise typer.Exit(asyncio.run(run()))
+
+
+@app.command("runs")
+@writes_when("runs", "apply")
+def runs(
+    reap: Annotated[
+        bool,
+        typer.Option(
+            "--reap",
+            help="Mark runs whose process is gone as abandoned. Reports first.",
+        ),
+    ] = False,
+    hours: Annotated[
+        float,
+        typer.Option("--hours", help="How long a run may be untouched before it is stale."),
+    ] = 6.0,
+    apply: Annotated[
+        bool,
+        typer.Option("--apply", help="With --reap, actually change the rows."),
+    ] = False,
+) -> None:
+    """Find ingestion runs whose process died, and close them out.
+
+    A run is marked `running` when it starts. If the process that owned it dies —
+    a closed laptop, a killed shell, a dropped connection — nothing moves it on,
+    and the row keeps claiming to be in progress forever. Measured on this corpus
+    before the check existed: 38 such runs, the oldest over a day, two of them
+    duplicate attempts at the same paper.
+
+    Reports first. `--reap` alone lists what it found; add `--apply` to change
+    anything. Reading state should not mutate it, and a reaped run's row is the
+    record of what actually happened.
+
+    Re-running a target then resumes it: the downloaded blob and the extracted
+    markdown are reused, so only the cheap steps are redone.
+    """
+
+    async def run() -> int:
+        from app.db.session import get_session_factory
+        from app.services.runs import reap_stale_runs
+
+        if not reap:
+            console.print(
+                "[dim]nothing to do — pass --reap to look for abandoned runs[/dim]"
+            )
+            return 0
+
+        factory = get_session_factory()
+        async with factory() as session:
+            out = await reap_stale_runs(
+                session, older_than_hours=hours, dry_run=not apply
+            )
+
+        # Narrowed once, here, so the formatting below is type-checked rather than
+        # asserted away at every use.
+        targets = cast("list[dict[str, Any]]", out["targets"])
+        found = cast("int", out["found"])
+        if not found:
+            console.print(
+                f"[green]no abandoned runs[/green] — nothing untouched for {hours:g}h"
+            )
+            return 0
+
+        table = Table(box=None, pad_edge=False)
+        for column, style in (
+            ("target", "bold"),
+            ("stuck", "yellow"),
+            ("age", "red"),
+            ("steps", "dim"),
+        ):
+            table.add_column(column, style=style)
+        for row in targets:
+            table.add_row(
+                str(row["target"]),
+                str(row["stuck_runs"]),
+                f"{row['age_hours'] or 0.0:.1f}h",
+                str(row["steps_completed"]),
+            )
+        console.print(table)
+
+        if not apply:
+            console.print(
+                f"\n[yellow]{found} run(s) look abandoned.[/yellow] "
+                f"Nothing changed. Re-run with [bold]--apply[/bold] to close them, "
+                "then [bold]paper ingest <target>[/bold] to resume."
+            )
+            return 0
+        console.print(
+            f"[green]closed {cast('int', out['reaped'])} run(s)[/green] as abandoned"
+        )
+        for row in targets:
+            console.print(f"  resume with: [bold]paper ingest {row['target']}[/bold]")
+        return 0
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+@app.command("sections")
+@writes_when("sections", "apply")
+def sections_cmd(
+    prune: Annotated[
+        bool,
+        typer.Option("--prune", help="Remove sections that have no page to point at."),
+    ] = False,
+    show: Annotated[
+        bool,
+        typer.Option("--show", help="List the documents that would lose sections."),
+    ] = False,
+    apply: Annotated[
+        bool, typer.Option("--apply", help="With --prune, actually delete them.")
+    ] = False,
+) -> None:
+    """Remove sections that cannot be navigated to.
+
+    A section exists so a reader can be told where to read. One with no page cannot
+    do that, and in practice it is not a section at all: it is a heading the
+    *renderer* produced. Measured here — an arXiv paper ingested from ar5iv
+    produced fourteen "sections" that were the abs page's furniture (`Submission
+    history`, `Access Paper:`, `BibTeX formatted citation`, `Demos`,
+    `arXivLabs: experimental projects`), and across 177 papers those outweighed the
+    257 genuine ones sixteen to one.
+
+    Reports first: `--prune` alone tells you what would go, `--show` names the
+    documents, and `--apply` is what changes anything. Chunks are never deleted —
+    only the navigation label they carried is removed.
+    """
+
+    async def run() -> int:
+        from app.db.session import get_session_factory
+        from app.services.section_prune import (
+            documents_with_unplaceable_sections,
+            prune_unplaceable_sections,
+        )
+
+        factory = get_session_factory()
+        async with factory() as session:
+            if show or not prune:
+                affected = await documents_with_unplaceable_sections(session)
+                if not affected:
+                    console.print("[green]every section has a page[/green]")
+                    return 0
+                table = Table(box=None, pad_edge=False)
+                for column, style in (("document", "bold"), ("kind", "dim"), ("junk", "red")):
+                    table.add_column(column, style=style)
+                for row in affected[:25]:
+                    table.add_row(row["doc_key"], str(row["kind"]), str(row["sections"]))
+                console.print(table)
+                if len(affected) > 25:
+                    console.print(f"[dim]… and {len(affected) - 25} more documents[/dim]")
+                console.print(
+                    f"[dim]{sum(int(r['sections']) for r in affected)} sections across "
+                    f"{len(affected)} documents have no page[/dim]"
+                )
+                if not prune:
+                    return 0
+            report = await prune_unplaceable_sections(session, apply=apply)
+        if report.applied:
+            console.print(
+                f"[green]removed {report.sections} unplaceable section(s) across "
+                f"{report.papers} document(s);[/green] {report.chunks_unlinked} chunk "
+                f"lost a navigation label and {report.kept} section(s) kept."
+            )
+        else:
+            console.print(
+                f"[yellow]{report.sections} section(s) across {report.papers} document(s) "
+                f"have no page.[/yellow] Nothing changed. Re-run with --apply to remove "
+                f"them."
+            )
+        return 0
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+@app.command("section")
+def section(
+    doc_key: Annotated[
+        str, typer.Argument(help="Document: an arXiv id or a local file's doc_key.")
+    ],
+    which: Annotated[
+        str,
+        typer.Argument(
+            metavar="SECTION",
+            help="A book's numbering (2.2) or words from its title (Debye).",
+        ),
+    ],
+    level: Annotated[
+        int | None, typer.Option("--level", "-L", help="Accept sections this deep or shallower.")
+    ] = None,
+    include_subsections: Annotated[
+        bool,
+        typer.Option(
+            "--with-subsections",
+            help="Also print the sections nested inside the one matched.",
+        ),
+    ] = False,
+) -> None:
+    """Print the text of one section of a document.
+
+    The other half of `paper ask --section`: that one finds passages by meaning
+    inside a section, this one gives you the section itself, in order, with the
+    page each chunk came from.
+
+    Section content is the chunks that point at the section, not its page range.
+    A section can span ten pages of which four produced text, and printing the
+    range would promise material the corpus does not hold — so the page is shown
+    per chunk, where it is a fact.
+    """
+
+    async def run() -> int:
+        from app.db.repositories import PaperRepository, SectionRepository
+        from app.db.session import get_session_factory
+        from app.services.sections_query import find_sections
+
+        factory = get_session_factory()
+        async with factory() as session:
+            paper = await PaperRepository(session).resolve(doc_key)
+            if paper is None:
+                console.print(f"[yellow]{doc_key} is not ingested[/yellow]")
+                return 1
+            found = await find_sections(
+                session, which, doc_keys=[paper.doc_key], max_level=level
+            )
+            if not found:
+                console.print(
+                    f"[yellow]no section matching {which!r} in {paper.doc_key!r}.[/yellow] "
+                    f"Run [bold]paper outline {paper.doc_key}[/bold] to list them."
+                )
+                return 1
+
+            sections = await SectionRepository(session).list_for_paper(paper.id)
+            by_ordinal = {row.ordinal: row for row in sections}
+            for match in found:
+                await _print_one_section(session, paper, match, by_ordinal, include_subsections)
+        return 0
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+async def _print_one_section(session, paper, match, by_ordinal, nested: bool) -> None:  # noqa: ANN001
+    """One section's heading, then its text."""
+    from app.db.repositories import SectionRepository  # noqa: PLC0415
+
+    indent = "  " * max(0, match.level - 1)
+    console.print(
+        f"[bold cyan]{indent}{match.title}[/bold cyan] "
+        f"[dim]p{match.pages} · section {match.ordinal} · from {match.source}[/dim]"
+    )
+
+    chunks = await SectionRepository(session).list_for_section(paper.id, match.ordinal)
+    if not chunks:
+        console.print(
+            f"[dim]  no text stored for this section"
+            f"{f' — its pages ({match.pages}) were never indexed' if match.pages != '-' else ''}[/dim]\n"
+        )
+    for chunk in chunks:
+        page = f"p{chunk.page_start}" if chunk.page_start else "p?"
+        console.print(f"  [dim]{page}[/dim] [green]{chunk.content_kind}[/green]")
+        console.print(chunk.text.rstrip())
+        console.print()
+
+    if not nested:
+        return
+    from app.services.sections_query import sections_within  # noqa: PLC0415
+
+    for row in sections_within(match, by_ordinal.values()):
+        console.print(
+            f"[dim]{'  ' * row.level}{row.title} · p{row.page_start or '?'}"
+            f" · {row.source}[/dim]"
+        )
+
+
+@app.command("outline")
+def outline(
+    arxiv_id: Annotated[
+        str,
+        typer.Argument(help="ArXiv id, versioned id, URL, or a document's doc_key."),
+    ],
+    max_level: Annotated[
+        int | None,
+        typer.Option("--level", "-L", help="Only sections this deep or shallower."),
+    ] = None,
+    after: Annotated[
+        int,
+        typer.Option("--after", help="Start after this page. For a partial ingest."),
+    ] = 0,
+) -> None:
+    """Print a document's table of contents with page ranges.
+
+    Two sources, both kept: the PDF's own bookmarks when the book has them, and
+    the headings the extraction found when it does not. Measured on three
+    textbooks: 341 bookmark entries, 174, and **0** — so the ``src`` column is
+    worth reading, because a book's outline may be half recovered from its text.
+
+    Sections come from the source document, not from what was extracted, so a
+    partial ingest still lists the whole book. ``--after`` narrows to the pages
+    that were actually indexed.
+    """
+
+    async def run() -> int:
+        from app.db.repositories import PaperRepository, SectionRepository
+        from app.db.session import get_session_factory
+
+        factory = get_session_factory()
+        async with factory() as session:
+            paper = await PaperRepository(session).resolve(arxiv_id)
+            if paper is None:
+                console.print(f"[yellow]{arxiv_id} is not ingested[/yellow]")
+                return 1
+            rows = await SectionRepository(session).list_for_paper(
+                paper.id, max_level=max_level
+            )
+            if not rows:
+                # The two reasons need saying separately. "No bookmarks" sent a
+                # reader looking for a PDF that was never downloaded, when the real
+                # answer is that this document was ingested from HTML and an HTML
+                # page has no pages to point at.
+                from_html = not any(doc.kind == "pdf" for doc in paper.contents)
+                console.print(
+                    "[yellow]no structure recorded[/yellow] — "
+                    + (
+                        "this document was ingested from an HTML rendering, which "
+                        "has no pages, so there is nothing to navigate to. "
+                        "Ingest the PDF for a table of contents."
+                        if from_html
+                        else "this document has neither PDF bookmarks nor headings "
+                        "the extraction could read."
+                    )
+                )
+                return 1
+
+            table = Table(box=None, pad_edge=False)
+            for column, style in (
+                ("", ""),
+                ("pages", "cyan"),
+                ("src", "dim"),
+                ("chunks", "dim"),
+            ):
+                table.add_column(column, style=style)
+
+            # Counting chunks per section needs the chunk rows, not the section
+            # rows: the link is on the chunk, and a section with no chunk is
+            # either outside what was indexed or genuinely empty.
+            counts = await _chunks_per_section(session, paper.id)
+            for row in rows:
+                if after and (row.page_start is None or row.page_start <= after):
+                    continue
+                if row.page_start is None and row.page_end is None:
+                    pages = "-"
+                elif row.page_end is None or row.page_end == row.page_start:
+                    pages = str(row.page_start or "-")
+                else:
+                    pages = f"{row.page_start}-{row.page_end}"
+                table.add_row(
+                    f"{'  ' * (row.level - 1)}{row.title}",
+                    pages,
+                    "pdf" if row.source == "outline" else "text",
+                    str(counts.get(row.ordinal, 0)) if counts else "",
+                )
+            console.print(f"[bold]{paper.title}[/bold] [dim]{paper.display_id}[/dim]")
+            console.print(table)
+            return 0
+
+    raise typer.Exit(asyncio.run(run()))
+
+
+async def _chunks_per_section(session: object, paper_id: str) -> dict[int, int]:
+    """How many chunks each section holds, for the outline's last column."""
+    from sqlalchemy import func, select  # noqa: PLC0415
+
+    from app.db.models import Chunk  # noqa: PLC0415
+
+    result = await session.execute(  # type: ignore[attr-defined]
+        select(Chunk.section_ordinal, func.count())
+        .where(Chunk.paper_id == paper_id, Chunk.section_ordinal.is_not(None))
+        .group_by(Chunk.section_ordinal)
+    )
+    return {ordinal: count for ordinal, count in result.all()}
 
 
 # ---------------------------------------------------------------------- spaces
@@ -1292,6 +2226,7 @@ def spaces_list() -> None:
 
 
 @spaces_app.command("add")
+@writes("spaces:add")
 def spaces_add(
     name: Annotated[str, typer.Argument(help="Space name, e.g. 'small-384'.")],
     model: Annotated[str, typer.Option("--model", "-m")],
@@ -1344,6 +2279,7 @@ def spaces_add(
 
 
 @spaces_app.command("activate")
+@writes("spaces:activate")
 def spaces_activate(
     name: Annotated[str, typer.Argument()],
 ) -> None:
@@ -1369,6 +2305,7 @@ def spaces_activate(
 
 
 @spaces_app.command("rm")
+@writes("spaces:rm")
 def spaces_rm(
     name: Annotated[str, typer.Argument()],
     drop_table: Annotated[
@@ -1435,6 +2372,7 @@ def spaces_sql(
 
 # ---------------------------------------------------------------------- doctor
 @app.command()
+@writes("reembed")
 def reembed(
     space: Annotated[str, typer.Option("--space", "-s", help="Target space.")] = "default",
     project: Annotated[
@@ -1450,6 +2388,14 @@ def reembed(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="List the papers, embed nothing.")
     ] = False,
+    device: Annotated[
+        str | None,
+        typer.Option(
+            "--device",
+            help="Embedding device: cpu, cuda, cuda:1, mps. Worth setting here: a "
+            "whole space is thousands of chunks.",
+        ),
+    ] = None,
 ) -> None:
     """Embed already-ingested chunks into another space. No downloads, no parsing."""
 
@@ -1463,7 +2409,7 @@ def reembed(
             target = await EmbeddingSpaceRepository(session).resolve(space)
 
         service = ReembedService(
-            provider=container.provider_for(target),
+            provider=container.provider_for(target, _device(device)),
             space=target,
             session_factory=container.session_factory,
             store=container.vector_store_for(target),
@@ -1500,6 +2446,7 @@ def reembed(
 
 
 @app.command("kinds")
+@writes("kinds")
 def kinds_command(
     all_chunks: Annotated[
         bool,
@@ -1703,6 +2650,7 @@ def version() -> None:
 
 
 @db_app.command("upgrade")
+@writes("db:upgrade")
 def db_upgrade(revision: Annotated[str, typer.Argument()] = "head") -> None:
     """Apply Alembic migrations."""
     from alembic import command
@@ -1716,6 +2664,7 @@ def db_upgrade(revision: Annotated[str, typer.Argument()] = "head") -> None:
 
 
 @db_app.command("downgrade")
+@writes("db:downgrade")
 def db_downgrade(revision: Annotated[str, typer.Argument()] = "-1") -> None:
     from alembic import command
     from alembic.config import Config
@@ -1770,7 +2719,7 @@ async def _assets_across_project(
         for paper, _link in papers:
             counts = await asset_repo.count(paper.id)
             if counts["figures"] or counts["tables"] or counts["display_equations"]:
-                rows.append((paper.arxiv_id, counts))
+                rows.append((paper.display_id, counts))
 
     console.print(
         f"[bold]{project}[/bold] [dim]· {len(rows)} papers with assets[/dim]\n"
@@ -1805,6 +2754,23 @@ def _parse_sources(values: list[str] | None) -> list[str] | None:
     from app.services.semantic_search import parse_sources
 
     return parse_sources(values)
+
+
+def _device(value: str | None) -> str | None:
+    """Validate ``--device``, or fail on the spot.
+
+    The rule is :func:`app.domain.devices.parse_device`, the same one the HTTP API
+    and the MCP tools use, wrapped only so the error arrives as a usage message
+    rather than a traceback. Kept in one place because a CLI that accepts a device
+    string the API rejects is a difference a caller only finds out about by
+    watching one of them work.
+    """
+    from app.domain.devices import DeviceError, parse_device  # noqa: PLC0415
+
+    try:
+        return parse_device(value)
+    except DeviceError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 async def _resolve(container, name: str | None):  # noqa: ANN001

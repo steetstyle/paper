@@ -5,12 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import AppSettings, get_settings
 from app.container import Container, get_container
-from app.domain.ids import parse_arxiv_id
 
 
 def container_dependency(request: Request) -> Container:
@@ -39,18 +38,49 @@ async def session_dependency(
         await session.close()
 
 
+def device_dependency(
+    device: str | None = Query(default=None),
+) -> str | None:
+    """Validate the ``?device=`` query argument of an embedding route.
+
+    Query-shaped counterpart to :data:`app.api.devices.DeviceField`: a request
+    body is validated by pydantic, but a query argument arrives as a plain string
+    and would otherwise reach torch misspelled.
+    """
+    from fastapi import HTTPException  # noqa: PLC0415
+
+    from app.api.devices import parse_device  # noqa: PLC0415
+
+    try:
+        return parse_device(device)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 ContainerDep = Annotated[Container, Depends(container_dependency)]
 SettingsDep = Annotated[AppSettings, Depends(settings_dependency)]
 SessionDep = Annotated[AsyncSession, Depends(session_dependency)]
+DeviceDep = Annotated[str | None, Depends(device_dependency)]
 
 
 def normalize_arxiv_id_or_400(value: str) -> str:
-    try:
-        return parse_arxiv_id(value).id
-    except ValueError as exc:
+    """Accept any handle a row can be addressed by, arXiv-shaped or not.
+
+    Used to reject anything that was not an arXiv id, which is right for a corpus
+    that is only arXiv papers and wrong for one that also holds books: a local
+    document is addressed by its ``doc_key``, and refusing that here meant
+    ``GET /papers/solid-state-basics`` was a 422 rather than a 404 — telling the
+    caller the document does not exist, only with the wrong status.
+
+    Now it only rejects an empty handle; whether the identifier names anything is
+    the repository's question, and it answers 404 when it does not.
+    """
+    text = (value or "").strip()
+    if not text:
         from fastapi import HTTPException  # noqa: PLC0415
 
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail="empty identifier")
+    return text
 
 async def resolve_space(
     container: Container,

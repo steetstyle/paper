@@ -94,7 +94,7 @@ async def papers_by_author(
 @router.get("/{arxiv_id}", response_model=PaperDetail, summary="Paper detail")
 async def get_paper(session: SessionDep, arxiv_id: str) -> PaperDetail:
     repo = PaperRepository(session)
-    paper = await repo.get_by_arxiv_id(normalize_arxiv_id_or_400(arxiv_id))
+    paper = await repo.resolve(normalize_arxiv_id_or_400(arxiv_id))
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
 
@@ -142,7 +142,7 @@ async def get_chunks(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    paper = await PaperRepository(session).get_by_arxiv_id(normalize_arxiv_id_or_400(arxiv_id))
+    paper = await PaperRepository(session).resolve(normalize_arxiv_id_or_400(arxiv_id))
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
 
@@ -168,7 +168,7 @@ async def get_markdown(
     container: ContainerDep, session: SessionDep, arxiv_id: str
 ) -> Response:
     """Return the MinerU/HTML-derived markdown used for embedding."""
-    paper = await PaperRepository(session).get_by_arxiv_id(normalize_arxiv_id_or_400(arxiv_id))
+    paper = await PaperRepository(session).resolve(normalize_arxiv_id_or_400(arxiv_id))
     if paper is None:
         raise HTTPException(status_code=404, detail=f"paper {arxiv_id} not ingested")
 

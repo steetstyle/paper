@@ -35,12 +35,16 @@ async def ingest(
     ``space`` selects which embedding model writes the vectors. Omit it to use
     the active space; naming a different one adds vectors without disturbing the
     space you already serve from.
+
+    ``device`` selects the device for *this run's* embedding steps, which is the
+    knob that makes a bulk ingest worth doing on cuda without a long-lived server
+    holding the weights there.
     """
     if not payload.arxiv_id and not payload.query:
         raise HTTPException(status_code=422, detail="provide either arxiv_id or query")
 
     space = await resolve_space(container, session, payload.space)
-    service = build_service(container, space)
+    service = build_service(container, space, payload.device)
 
     if payload.arxiv_id:
         if wait:
@@ -110,10 +114,14 @@ async def ingest(
     return IngestAccepted(run_ids=[], paper_ids=[], status=RunStatus.PENDING, space=space.name)
 
 
-def build_service(container: ContainerDep, space) -> IngestionService:  # noqa: ANN001
+def build_service(  # noqa: ANN001
+    container: ContainerDep,
+    space,
+    device: str | None = None,
+) -> IngestionService:
     from app.services.ingestion import build_ingestion_service  # noqa: PLC0415
 
-    return build_ingestion_service(container, space)
+    return build_ingestion_service(container, space, device=device)
 
 
 async def _precreate_run(

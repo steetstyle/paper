@@ -36,7 +36,7 @@ class StubExtractor:
     def describe_backends(self) -> dict[str, str]:
         return {"stub": "stub (fake)"}
 
-    async def extract_pdf(self, path: Path):  # noqa: ARG002
+    async def extract_pdf(self, path: Path, request=None):  # noqa: ARG002
         from app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("unused")
@@ -142,7 +142,21 @@ class TestIngestion:
 
         run = (await client.get(f"/api/v1/ingest/runs/{body['run_ids'][0]}")).json()
         assert run["status"] == "succeeded"
-        assert len(run["steps"]) == 10
+        # The canonical step list, in order. Asserted by name so adding or
+        # reordering a step is a deliberate edit rather than a number that drifts.
+        assert [step["name"] for step in run["steps"]] == [
+            "fetch_metadata",
+            "persist_metadata",
+            "fetch_content",
+            "extract_text",
+            "extract_references",
+            "extract_assets",
+            "chunk_text",
+            "build_sections",
+            "embed_chunks",
+            "index_vectors",
+            "finalize",
+        ]
         assert all(step["duration_ms"] is not None for step in run["steps"])
 
         detail = (await client.get("/api/v1/papers/1706.03762")).json()
@@ -162,7 +176,14 @@ class TestIngestion:
 
     async def test_missing_paper_is_404(self, client) -> None:
         assert (await client.get("/api/v1/papers/2401.00001")).status_code == 404
-        assert (await client.get("/api/v1/papers/not-an-id")).status_code == 422
+        # 404, not 422. The corpus holds local documents too, addressed by a
+        # doc_key, so "not an arXiv id" is no longer evidence of anything — only
+        # "no such row" is. Answering 422 told callers a document that simply had
+        # not been ingested was a malformed request.
+        assert (await client.get("/api/v1/papers/not-an-id")).status_code == 404
+
+    async def test_an_empty_identifier_is_422(self, client) -> None:
+        assert (await client.get("/api/v1/papers/%20")).status_code in (404, 422)
 
     async def test_markdown_endpoint(self, client) -> None:
         await client.post(

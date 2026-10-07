@@ -251,7 +251,7 @@ class StubExtractor:
 
     available_backends = ["stub"]
 
-    async def extract_pdf(self, path: Path):  # noqa: ARG002
+    async def extract_pdf(self, path: Path, request=None):  # noqa: ARG002
         from app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("no PDF in this test")
@@ -394,7 +394,7 @@ class TestFullPipeline:
 
             available_backends: list[str] = []
 
-            async def extract_pdf(self, path: Path):  # noqa: ARG002
+            async def extract_pdf(self, path: Path, request=None):  # noqa: ARG002
                 raise ExtractionError("no extraction backend available")
 
         steps = [
@@ -441,7 +441,7 @@ class TestFullPipeline:
         class StubMineru:
             available_backends = ["stub"]
 
-            async def extract_pdf(self, path: Path):
+            async def extract_pdf(self, path: Path, request=None):
                 return ExtractedDocument(
                     markdown="# 1 Introduction\n\nAttention is all you need.\n\n"
                     "## 2 Results\n\nWe reach 28.4 BLEU on WMT 2014 English-to-German.",

@@ -485,12 +485,12 @@ class TestExtractorOrchestration:
             def available(self) -> bool:
                 return True
 
-            async def extract(self, pdf_path, workdir):  # noqa: ANN001
+            async def extract(self, pdf_path, workdir, request=None):  # noqa: ANN001, ARG002
                 order.append("python_api")
                 raise ExtractionError("gpu oom")
 
         class PypdfOk(PyPdfBackend):
-            async def extract(self, pdf_path, workdir):  # noqa: ANN001
+            async def extract(self, pdf_path, workdir, request=None):  # noqa: ANN001, ARG002
                 order.append("pypdf")
                 return _build_document(
                     markdown=SAMPLE_MARKDOWN, blocks=[],
@@ -513,7 +513,7 @@ class TestExtractorOrchestration:
             def available(self) -> bool:
                 return True
 
-            async def extract(self, pdf_path, workdir):  # noqa: ANN001
+            async def extract(self, pdf_path, workdir, request=None):  # noqa: ANN001, ARG002
                 raise ExtractionError("nope")
 
         settings = MineruSettings(backend_order=["pypdf"])
@@ -527,14 +527,14 @@ class TestExtractorOrchestration:
             def available(self) -> bool:
                 return True
 
-            async def extract(self, pdf_path, workdir):  # noqa: ANN001
+            async def extract(self, pdf_path, workdir, request=None):  # noqa: ANN001, ARG002
                 return _build_document(
                     markdown="   ", blocks=[], source=ContentSource.PDF_MINERU,
                     backend="fake", meta={},
                 )
 
         class PypdfOk(PyPdfBackend):
-            async def extract(self, pdf_path, workdir):  # noqa: ANN001
+            async def extract(self, pdf_path, workdir, request=None):  # noqa: ANN001, ARG002
                 return _build_document(
                     markdown=SAMPLE_MARKDOWN, blocks=[],
                     source=ContentSource.PDF_PYPDF, backend="pypdf", meta={},

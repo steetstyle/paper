@@ -39,9 +39,34 @@ class Paper(Base):
     __tablename__ = "papers"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
-    arxiv_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    versioned_id: Mapped[str] = mapped_column(String(72), index=True)
+
+    # Identity is source-agnostic. `doc_key` is the universal handle — the arXiv
+    # id for a paper, a slug for a local file — and every lookup goes through it,
+    # so there is no second resolution path to keep in sync. `arxiv_id` stays a
+    # first-class column because the citation graph and the arXiv client both
+    # need it, but a document has none.
+    doc_key: Mapped[str] = mapped_column(String(128), unique=True)
+    # Still UNIQUE even though nullable, and that is exactly the intent: SQL
+    # permits any number of NULLs in a UNIQUE column, so the constraint already
+    # reads "two papers cannot share an arXiv id, any number of documents can
+    # have none". A partial index would say the same thing in more machinery.
+    arxiv_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    versioned_id: Mapped[str | None] = mapped_column(String(72), index=True)
     version: Mapped[int | None] = mapped_column(Integer)
+
+    kind: Mapped[str] = mapped_column(String(16), default="paper")
+    """What this is: ``paper``, ``book``, ``notes``, ``report``, ``thesis``.
+
+    A reader-facing distinction, and what the CLI groups by. Not a type
+    hierarchy — every kind goes through the same pipeline and the same tables.
+    """
+
+    file_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    """Hash of the source file. Dedupe on ingest, not a constraint: re-ingesting
+    the same book after a failure has to be possible."""
+
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    """Pages in the source PDF. Null for HTML, which has no pages."""
 
     title: Mapped[str] = mapped_column(Text)
     abstract: Mapped[str] = mapped_column(Text, default="")
@@ -69,6 +94,12 @@ class Paper(Base):
 
     raw_entry: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
+    sections: Mapped[list[DocumentSection]] = relationship(
+        back_populates="paper",
+        cascade="all, delete-orphan",
+        order_by="DocumentSection.ordinal",
+        lazy="noload",
+    )
     contents: Mapped[list[RawDocument]] = relationship(
         back_populates="paper", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -112,8 +143,17 @@ class Paper(Base):
             if link.author
         ]
 
+    @property
+    def display_id(self) -> str:
+        """The handle to show and accept: arXiv id, else the local slug."""
+        return self.arxiv_id or self.doc_key
+
+    @property
+    def is_paper(self) -> bool:
+        return self.arxiv_id is not None
+
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Paper {self.arxiv_id} {self.title[:40]!r}>"
+        return f"<{type(self).__name__} {self.doc_key} {self.title[:40]!r}>"
 
 
 class Author(Base):
@@ -217,7 +257,13 @@ class RawDocument(Base):
 
     __tablename__ = "raw_documents"
     __table_args__ = (
-        UniqueConstraint("paper_id", "kind", "sha256", name="uq_raw_documents_paper_kind_sha"),
+        # `page_start` is part of the key because one file ingested in ranges
+        # produces several rows that share every other column. Without it the
+        # second range would violate the constraint and the feature could not
+        # exist at all.
+        UniqueConstraint(
+            "paper_id", "kind", "sha256", "page_start", name="uq_raw_documents_paper_kind_sha"
+        ),
         Index("ix_raw_documents_paper_kind", "paper_id", "kind"),
     )
 
@@ -229,6 +275,13 @@ class RawDocument(Base):
     content_type: Mapped[str] = mapped_column(String(128), default="")
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     sha256: Mapped[str] = mapped_column(String(64), index=True)
+    # Which slice of a multi-page source this row covers, 1-based inclusive.
+    # Null means "the whole document". A 700-page book ingested as 1-200,
+    # 201-400, 401-700 yields three rows that extend each other rather than
+    # replacing each other — the difference between resumable and
+    # restart-from-scratch.
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
     meta: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=utcnow)
 
@@ -236,6 +289,41 @@ class RawDocument(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<RawDocument {self.kind} {self.sha256[:12]}>"
+
+
+class DocumentSection(Base):
+    """One structural division of a document: a chapter, a numbered section.
+
+    Both sources are kept because real books disagree. Measured on the three used
+    to build this: the PDF outline gave 341 and 174 entries for two books and
+    **zero** for a third, whose sections had to come from the extracted markdown
+    instead. So ``source`` records where a given row came from, and the two are
+    merged rather than one being treated as a fallback for the other.
+
+    ``level`` is the heading's own depth — inferred from numbering ("2.3.1" is
+    level 3), never from the count of ``#`` characters, because MinerU emits every
+    heading at the same ATX depth and reading depth off that flattens the book.
+    """
+
+    __tablename__ = "document_sections"
+    __table_args__ = (
+        UniqueConstraint("paper_id", "ordinal", name="uq_document_sections_ordinal"),
+        Index("ix_document_sections_paper", "paper_id", "page_start"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    paper_id: Mapped[str] = mapped_column(ForeignKey("papers.id", ondelete="CASCADE"), index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(Text)
+    level: Mapped[int] = mapped_column(Integer, default=1)
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(16), default="outline")
+
+    paper: Mapped[Paper] = relationship(back_populates="sections")
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<Section {self.ordinal} L{self.level} {self.title[:40]!r}>"
 
 
 class Chunk(Base):
@@ -258,6 +346,15 @@ class Chunk(Base):
     # Indexed because "only equations" / "only figures" is a first-class filter,
     # not a post-hoc scan.
     content_kind: Mapped[str] = mapped_column(String(16), default="body", index=True)
+
+    # Where in the source this chunk came from. Null for HTML, which has no
+    # pages — the column is nullable precisely because "page 12" is meaningless
+    # for an arXiv HTML rendering and "which page?" is essential in a book.
+    page_start: Mapped[int | None] = mapped_column(Integer)
+    page_end: Mapped[int | None] = mapped_column(Integer)
+    # A pointer into document_sections rather than the title text: filtering by
+    # section is then a column comparison, and one heading is stored once.
+    section_ordinal: Mapped[int | None] = mapped_column(Integer)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     char_start: Mapped[int] = mapped_column(Integer, default=0)
     char_end: Mapped[int] = mapped_column(Integer, default=0)
@@ -316,6 +413,9 @@ class IngestionRun(Base):
         ForeignKey("papers.id", ondelete="CASCADE"), nullable=True, index=True
     )
     arxiv_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    doc_key: Mapped[str | None] = mapped_column(String(128), index=True)
+    """Universal handle, mirroring `papers.doc_key`, so a run of a local file is
+    findable by the same argument an ingest takes."""
 
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     requested_by: Mapped[str] = mapped_column(String(64), default="api")

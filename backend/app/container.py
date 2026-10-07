@@ -28,6 +28,7 @@ from app.infra.http import HttpFetcher
 from app.infra.storage import BlobStore, LocalBlobStore
 from app.logging import get_logger
 from app.pipeline.steps import (
+    BuildSectionsStep,
     ChunkTextStep,
     EmbedChunksStep,
     ExtractAssetsStep,
@@ -103,16 +104,31 @@ class Container:
         """The provider described by ``EMBEDDING_*`` settings (the default space)."""
         return self.provider_for(self.default_space)
 
-    def provider_for(self, space: EmbeddingSpace) -> EmbeddingProvider:
-        """Provider for a space.
+    def provider_for(
+        self, space: EmbeddingSpace, device: str | None = None
+    ) -> EmbeddingProvider:
+        """Provider for a space, on a given device.
 
         A space naming the configured provider reuses the shared instance; any
         other space gets its own, built from the space's own model id.
+
+        The cache is keyed by **space and device together**, because the model is
+        loaded once and a loaded model belongs to the device it was loaded on —
+        moving an existing encoder would leave the previous device holding a copy
+        of the weights. Keying on the space alone would therefore make the second
+        device silently reuse the first one's.
+
+        The cost is real and worth stating: a second device means a second copy of
+        the model, which is exactly the VRAM this process avoids holding by
+        default. That is why ``device`` is an explicit per-operation argument
+        rather than something that flips silently — asking for ``cuda`` is asking
+        for GPU memory, and it happens only on the call that asked.
         """
-        key = space.fingerprint
+        resolved = (device or self.settings.embedding.device or "cpu").strip().lower()
+        key = f"{space.fingerprint}@{resolved}"
         if key in self._embeddings:
             return self._embeddings[key]
-        provider = self._build_provider(space)
+        provider = self._build_provider(space, resolved)
         self._embeddings[key] = provider
         logger.info(
             "embedding_provider_ready",
@@ -121,12 +137,17 @@ class Container:
                 "provider": provider.name,
                 "model": provider.model,
                 "dims": provider.dimensions,
+                "device": resolved,
             },
         )
         return provider
 
-    def _build_provider(self, space: EmbeddingSpace) -> EmbeddingProvider:
+    def _build_provider(self, space: EmbeddingSpace, device: str | None = None) -> EmbeddingProvider:
         if space.fingerprint == self.default_space.fingerprint:
+            if device and device != (self.settings.embedding.device or "cpu"):
+                return build_provider(
+                    self.settings.embedding.model_copy(update={"device": device})
+                )
             return build_provider(self.settings.embedding)
         # A managed space: same provider family, its own model/dimensions.
         from app.config import EmbeddingSettings  # noqa: PLC0415
@@ -140,7 +161,9 @@ class Container:
                 normalize_embeddings=self.settings.embedding.normalize_embeddings,
                 openai_api_key=self.settings.embedding.openai_api_key,
                 openai_base_url=self.settings.embedding.openai_base_url,
-                device=self.settings.embedding.device,
+                # The requested device, not the configured one: a managed space
+                # asked for on cuda must not silently come back on cpu.
+                device=device or self.settings.embedding.device,
                 cache_dir=self.settings.embedding.cache_dir,
                 space=space.name,
             )
@@ -192,10 +215,20 @@ class Container:
         return store
 
     # -------------------------------------------------------------- pipeline
-    def build_steps(self, space: EmbeddingSpace | None = None) -> list[Step]:
-        """The canonical ingestion pipeline for one embedding space."""
+    def build_steps(
+        self,
+        space: EmbeddingSpace | None = None,
+        *,
+        device: str | None = None,
+    ) -> list[Step]:
+        """The canonical ingestion pipeline for one embedding space.
+
+        ``device`` applies to the embedding steps only. Extraction has its own
+        device, per document, because a corpus holds both a scanned textbook that
+        wants the GPU and a three-page note that does not.
+        """
         space = space or self.active_space
-        provider = self.provider_for(space)
+        provider = self.provider_for(space, device)
         store = self.vector_store_for(space)
         return [
             FetchMetadataStep(self.arxiv),
@@ -205,6 +238,7 @@ class Container:
             ExtractReferencesStep(self.blob_store),
             ExtractAssetsStep(self.blob_store),
             ChunkTextStep(self.chunker),
+            BuildSectionsStep(),
             EmbedChunksStep(
                 provider,
                 space,

@@ -518,33 +518,56 @@ def _bbox(value: Any) -> tuple[int, int, int, int] | None:  # noqa: ANN401
     return None
 
 
-def extract_assets_from_mineru(output_dir: Path, *, stem: str | None = None) -> Assets:
+def extract_assets_from_mineru(
+    output_dir: Path | None = None,
+    *,
+    blocks: list[dict[str, Any]] | None = None,
+    image_root: Path | None = None,
+    stem: str | None = None,
+) -> Assets:
     """Figures, tables and formulas from a MinerU PDF run.
 
-    Reads ``*_content_list.json``, which is the structured form of the run: every
-    figure, table and formula carries its own cropped image on disk, plus the
-    page and bounding box it came from. That is the one thing the HTML path
-    cannot give us, and the reason this exists.
+    ``content_list.json`` is the structured form of a run: every figure, table and
+    formula carries the page and bounding box it came from. That is the one thing
+    the HTML path cannot give us, and the reason this exists.
+
+    ``blocks`` may be supplied directly, which is how the pipeline calls it: the
+    extractor loads the block list while the output directory still exists and
+    deletes the directory before returning, so reading it afterwards found
+    nothing. Measured on the live corpus: 691 figures, 288 tables and 62 391
+    equations, **all** of them from the HTML path — the MinerU path had produced
+    zero rows for every paper ingested.
     """
-    path = content_list_path(output_dir)
-    if path is None:
-        logger.debug("mineru_content_list_absent", extra={"dir": str(output_dir)})
-        return Assets()
-    try:
-        blocks = json.loads(path.read_text(errors="replace"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("mineru_content_list_unreadable", extra={"error": str(exc)})
-        return Assets()
+    if blocks is None:
+        if output_dir is None:
+            return Assets()
+        path = content_list_path(output_dir)
+        if path is None:
+            logger.debug("mineru_content_list_absent", extra={"dir": str(output_dir)})
+            return Assets()
+        try:
+            blocks = json.loads(path.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("mineru_content_list_unreadable", extra={"error": str(exc)})
+            return Assets()
+        image_root = image_root or path.parent
     if not isinstance(blocks, list):
         return Assets()
 
-    root = path.parent
+    root = image_root
     figures: list[FigureAsset] = []
     tables: list[TableAsset] = []
     equations: list[EquationAsset] = []
 
     def local_image(img_path: str | None) -> str | None:
-        if not img_path:
+        """Resolve a cropped image, when the run's directory is still around.
+
+        ``root`` is None when the blocks came from memory, which is the normal
+        case now: the extractor has already deleted its scratch directory. An
+        asset then keeps its caption, page and bounding box and simply has no
+        image file — a degraded asset beats a missing one.
+        """
+        if not img_path or root is None:
             return None
         candidate = root / img_path
         return str(candidate) if candidate.exists() else None

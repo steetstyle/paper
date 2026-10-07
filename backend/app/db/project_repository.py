@@ -354,19 +354,26 @@ class ProjectRepository:
                 select(Paper.id, Paper.arxiv_id, Paper.versioned_id).where(
                     func.lower(Paper.arxiv_id).in_({b for b in bare if b})
                     | func.lower(Paper.versioned_id).in_(lowered)
+                    # `doc_key` is what a local file is addressed by, so the
+                    # same call resolves both kinds without a second path.
+                    | Paper.doc_key.in_(ordered)
                     | Paper.id.in_(ordered)
                 )
             )
         ).all()
 
-        # One lookup table for every accepted spelling of a paper.
+        # One lookup table for every accepted spelling. ArXiv spellings are
+        # only registered when the row has them — a local document has none, and
+        # `normalize_arxiv_reference(None)` would crash rather than degrade.
         by_key: dict[str, str] = {}
         for paper_id, arxiv_id, versioned_id in rows:
             for key in (paper_id, arxiv_id, versioned_id):
-                by_key[key] = paper_id
-                by_key[key.lower()] = paper_id
-            by_key[normalize_arxiv_reference(arxiv_id).lower()] = paper_id
-            by_key[normalize_arxiv_reference(versioned_id).lower()] = paper_id
+                if key:
+                    by_key[key] = paper_id
+                    by_key[key.lower()] = paper_id
+            for value in (arxiv_id, versioned_id):
+                if value:
+                    by_key[normalize_arxiv_reference(value).lower()] = paper_id
 
         resolved: list[str] = []
         unresolved: list[str] = []
