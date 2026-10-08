@@ -202,7 +202,7 @@ def _html_to_markdown_with_bs4(html: str) -> str:
 
 
 def _reduce_figures_to_captions(soup: Any) -> None:
-    """Replace each ``<figure>`` with its caption text, keeping any equations.
+    """Replace each ``<figure>`` with whatever searchable text it holds.
 
     The image itself cannot go into markdown, but the caption is exactly what a
     reader searches for ("show me the figures about attention heads"), and the
@@ -216,24 +216,54 @@ def _reduce_figures_to_captions(soup: Any) -> None:
     :func:`app.clients.content.assets.extract_assets_from_html` from the raw
     HTML, so nothing is lost here.
 
+    A figure that holds a **table** is not reduced to its caption, because in
+    LaTeXML that is where the data is. Measured on 2412.13663: eleven
+    ``<figure>`` elements, all eleven ``ltx_table``, all eleven wrapping a real
+    table — 122 cells in Table 1 alone — and **not one table anywhere outside a
+    figure**. Collapsing each to its caption therefore deleted every table in the
+    paper, leaving the corpus with the line "Table 1: Results for all models..."
+    and none of the results. That paper stored 34 body chunks, an abstract and no
+    table at all.
+
+    The conversion was never the obstacle: ``markdownify`` renders these tables as
+    clean pipe tables with the numbers intact. They were being thrown away one
+    step before it, which is why nothing about the markdown looked broken.
+
     Runs after :func:`_extract_equation_tables`, so a display equation sitting
     inside a figure arrives as a sentinel paragraph and is carried over with the
-    caption rather than discarded along with the image.
+    caption rather than discarded along with the image — equation *layout* tables
+    are already gone by then, so any ``<table>`` still standing is real data.
     """
     for figure in soup.select("figure"):
         caption = figure.select_one("figcaption")
-        keep: list[Any] = []
+        caption_paragraph = None
         if caption is not None:
             # The "Figure N:" tag is a sibling span inside the caption.
             text = caption.get_text(" ", strip=True)
             if text:
-                node = soup.new_tag("p")
-                node.string = text
-                keep.append(node)
+                caption_paragraph = soup.new_tag("p")
+                caption_paragraph.string = text
+
+        data_table = figure.select_one("table")
+        if data_table is not None:
+            # Unwrap rather than summarise: keep the table's own wrapper so a
+            # multi-part table keeps its parts, and keep document order, which for
+            # LaTeXML is table-then-caption.
+            keep = [
+                child.extract()
+                for child in figure.find_all(recursive=False)
+                if child is not caption
+            ]
+            if caption_paragraph is not None:
+                keep.append(caption_paragraph)
+            figure.replace_with(keep[0] if len(keep) == 1 else _wrapper(soup, keep))
+            continue
+
+        keep = [caption_paragraph] if caption_paragraph is not None else []
         keep.extend(
             child
             for child in figure.find_all("p", recursive=True)
-            if _EQUATION_SENTINEL.format(index="") in child.get_text()
+            if _EQUATION_MARKER_RE.search(child.get_text())
         )
         if not keep:
             # An image with no caption and no equation carries no searchable text.
@@ -251,6 +281,20 @@ def _wrapper(soup: Any, nodes: list[Any]) -> Any:  # noqa: ANN401
 
 
 _EQUATION_SENTINEL = "xPAPEREQx{index}x"
+
+#: Matches a sentinel whatever its index.
+#:
+#: Derived from the template so the two cannot drift apart, which is how the guard
+#: in :func:`_reduce_figures_to_captions` came to never match anything: it tested
+#: for the template with an *empty* index, ``"xPAPEREQxx"``, and no real sentinel
+#: contains that — the markers are ``xPAPEREQx0x``, ``xPAPEREQx1x``, and so on. The
+#: condition was quietly false, so every display equation sitting inside a
+#: ``<figure>`` was discarded along with the image it was drawn in, which is most
+#: of them in a paper whose equations are figures.
+_SENTINEL_PREFIX, _SENTINEL_SUFFIX = _EQUATION_SENTINEL.split("{index}")
+_EQUATION_MARKER_RE = re.compile(
+    rf"{re.escape(_SENTINEL_PREFIX)}\d+{re.escape(_SENTINEL_SUFFIX)}"
+)
 
 
 def _extract_equation_tables(soup: Any) -> list[str]:
