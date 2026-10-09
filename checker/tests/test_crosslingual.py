@@ -13,6 +13,8 @@ coincidence grades ``review``.
 
 from __future__ import annotations
 
+import pytest
+
 from checker_app.config import get_settings
 from checker_app.domain.enums import MatchKind
 from checker_app.domain.segmentation import SentenceSplitter
@@ -273,5 +275,70 @@ def test_thresholds_are_documented_in_the_payload(tmp_path) -> None:
     assert set(payload["confidence_counts"]) == {"high", "medium", "review"}
 
 
+def _occurrences(haystack: str, needle: str) -> list[int]:
+    found: list[int] = []
+    start = haystack.find(needle)
+    while start != -1:
+        found.append(start)
+        start = haystack.find(needle, start + 1)
+    return found
+
+
 def test_match_kind_exists_for_the_pipeline() -> None:
     assert MatchKind.CROSS_LINGUAL.value == "cross_lingual"
+
+
+def test_the_module_docstring_is_corrected_in_place() -> None:
+    """This docstring once overstated its evidence; the numbers must not drift back.
+
+    Two claims were corrected after review. The 80 / 26.7 / 16.7 sequence is one
+    Arabic literary translation tested with three weak systems, not a general
+    cross-lingual result, and a larger modern EN-FA measurement showed no drop at
+    all for paraphrase. And the TR-MTEB figures are EN-TR bitext 99.43 against
+    6.78 - 73.07 and 37.02 were the `Mean(Task)` column, misattributed.
+
+    The correction quotes the wrong numbers in order to label them, so the check
+    is that they only ever appear next to a word that condemns them - not that
+    they are absent.
+    """
+    from checker_app.services import crosslingual  # noqa: PLC0415
+
+    doc = crosslingual.__doc__ or ""
+    assert "6.78" in doc and "99.43" in doc, "doğru bitext rakamları eksik"
+    assert "0.531" in doc, "Türkçe için ölçülen leksikal örtüşme kayboldu"
+    assert "0.97" in doc and "0.96" in doc, "EN↔FA karşı bulgusu eksik"
+    # The ensemble caveat is the part that was previously missing entirely.
+    assert "fusion of eight methods" in doc
+    assert "34.49" in doc, "bilimsel korpusta en iyi tek yöntemin skoru eksik"
+
+    for wrong in ("37.02", "73.07"):
+        for position in _occurrences(doc, wrong):
+            window = doc[max(0, position - 260) : position + 260].lower()
+            assert any(
+                marker in window
+                for marker in ("wrong", "not bitext", "mean(task)", "misattribut")
+            ), f"{wrong} bir yerde hâlâ doğru olarak sunuluyor: ...{window[200:320]}..."
+
+
+def test_the_reference_audit_reports_a_positive_predictive_value() -> None:
+    """A flag count is not a problem count, and the payload has to say so.
+
+    Measured: at a 1-2% base rate the strongest verifiers reach only 5-18% PPV -
+    four to nine false alarms per true catch - and RefChecker's FPR is 50.7%.
+    """
+    from checker_app.services.references import (  # noqa: PLC0415
+        POSITIVE_PREDICTIVE_VALUE,
+        expected_true_findings,
+    )
+
+    ppv = POSITIVE_PREDICTIVE_VALUE
+    assert ppv["academic_paper_base_rate"] == (0.0031, 0.0081)
+    assert ppv["verified_pp_range"] == (0.02, 0.18)
+    assert ppv["false_alarms_per_true_catch"] == "4-9"
+    assert ppv["refchecker_measured_fpr"] == pytest.approx(0.507)
+
+    # A range, not an invented point estimate: with one flag the honest answer
+    # is "probably not".
+    assert "muhtemelen 0" in expected_true_findings(1)
+    assert expected_true_findings(0) == "0"
+    assert "40" in expected_true_findings(40)

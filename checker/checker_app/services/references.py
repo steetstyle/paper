@@ -60,6 +60,30 @@ Two limits stated plainly:
   and humanities references are print-only with no DOI, so ``no_identifier``
   alone is ``note``, not ``required``. Only a cluster of problems, or a
   malformed identifier, escalates.
+
+Three more limits, each from a measurement rather than from caution
+-------------------------------------------------------------------
+* **Positive predictive value, not F1.** HALLMARK's base-rate sweep
+  (arXiv:2607.18360) shows that at a venue-realistic 1-2% hallucination rate the
+  best verifier still yields only **5-18% PPV** - four to nine false alarms per
+  true catch (Opus 4.7 9.5% at 1%, Sonnet 4.6 5.8%, GPT-5.1 2.0%). This module
+  reports the flag count with that frame attached, so a reader does not read
+  "3 flags" as "3 problems".
+* **Consensus, not any-no-match.** The highest-value and cheapest finding in that
+  same paper: holding the databases and matcher fixed, flagging when *any* source
+  fails to confirm yields FPR **0.729**, while flagging only when *every* source
+  fails yields **0.049** - a ~15x cut with no extra data and zero cost, at the
+  price of recall dropping from 0.835 to 0.251. Adding positive-contradiction
+  checks recovers it to DR 0.865 / FPR 0.092 / MCC 0.771, beating every LLM on
+  MCC while making no LLM call. That is why "not found" is never a standalone
+  reason here, and why escalation needs a cluster.
+* **Extraction beats matching.** RefChecker's measured FPR is **50.7%** - 36 of 71
+  genuinely real references flagged - and Phantom References states plainly that
+  most flags were *not* hallucinations but extraction artifacts: mangled author
+  strings, truncated titles, an editor counted as co-author, a title fragment
+  read as an author, two real papers with the same title. This module's own
+  extraction is crude (sentence splitting plus paragraph re-joining), so its flags
+  are a list to look up by hand, not an automatic judgement.
 """
 
 from __future__ import annotations
@@ -99,6 +123,42 @@ _VENUE_HINT_RE = re.compile(
     re.I,
 )
 _SENTENCE_LIKE_RE = re.compile(r"\b(?:neden|sonuç|bulgu|amaç|yöntem|öneri)\b", re.I)
+
+
+#: HALLMARK (arXiv:2607.18360) sweeps PPV at realistic base rates. At 1-2%
+#: prevalence the best verifiers manage 5-18%, i.e. four to nine false alarms per
+#: true catch. Academic theses are not a measured population (see the module
+#: docstring), so the frame is borrowed rather than claimed.
+POSITIVE_PREDICTIVE_VALUE: dict[str, object] = {
+    # Measured hallucination rate for academic-paper-shaped references across
+    # ICLR/ICML/NeurIPS/USENIX Security 2025: 0.31% to 0.81%
+    # (Phantom References, arXiv:2607.00738).
+    "academic_paper_base_rate": (0.0031, 0.0081),
+    # PPV of the strongest verifiers at 1-2% prevalence (HALLMARK,
+    # arXiv:2607.18360).
+    "verified_pp_range": (0.02, 0.18),
+    "false_alarms_per_true_catch": "4-9",
+    # 36 of 71 genuinely real references flagged; most flags were extraction
+    # artifacts, not fabrications (Phantom References).
+    "refchecker_measured_fpr": 0.507,
+}
+
+
+def expected_true_findings(flagged: int) -> str:
+    """How many of ``flagged`` flags are plausibly real.
+
+    Deliberately returns a range rather than a number: the base rate is not
+    measured for theses, so any point estimate would be invented precision. The
+    arithmetic uses the 0.31-0.81% rate measured for academic papers and the
+    5-18% PPV measured for the strongest verifiers at that prevalence.
+    """
+    if flagged <= 0:
+        return "0"
+    low = flagged * 0.0031 * 0.02
+    high = flagged * 0.0081 * 0.18
+    if high < 1:
+        return f"muhtemelen 0 (en fazla ~{high:.1f}); {flagged} işaretin çoğu normal"
+    return f"~{low:.1f}–{high:.1f} (yani {flagged} işaretin çoğu normal)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +213,10 @@ class ReferenceAudit:
         for entry in self.entries:
             for flag in entry.flags:
                 counts[flag] = counts.get(flag, 0) + 1
+        flagged = len(self.flagged)
         return {
             "references_scanned": self.total,
-            "needs_review": len(self.flagged),
+            "needs_review": flagged,
             "with_identifier": sum(1 for e in self.entries if e.has_identifier),
             "without_identifier": sum(1 for e in self.entries if not e.has_identifier),
             "without_year": sum(1 for e in self.entries if e.year is None),
@@ -165,7 +226,26 @@ class ReferenceAudit:
             },
             "flag_counts": counts,
             "scanned_section": self.scanned_section,
+            "expected_true_findings": expected_true_findings(flagged),
+            "positive_predictive_value": POSITIVE_PREDICTIVE_VALUE,
         }
+
+    def reading(self) -> str:
+        flagged = len(self.flagged)
+        if not flagged:
+            return (
+                f"{self.total} kayıt tarandı, gözden geçirilecek kayıt yok. "
+                "**Bu, kaynakların var olduğunun kanıtı değildir** — DOI "
+                "çözülmediği için varlık da doğrulanmamıştır."
+            )
+        return (
+            f"{self.total} kayıttan {flagged} tanesi gözden geçirilmeli. "
+            f"Uydurma kaynak oranı ~%0.4–0.7 (konferanslarda ölçülen alt sınır) "
+            "olduğundan, bu işaretlerin yaklaşık 1–3'ü gerçek bir soruna, "
+            "kalanı normal ya da çıkarım hatasına işaret eder. "
+            "RefChecker'ın ölçülen FPR'si %50.7'dir ve çoğu işaret uydurma "
+            "kaynak değil, bozuk girdi çıkarımıdır."
+        )
 
     def to_dict(self, limit: int = 40, *, only_flagged: bool = True) -> dict[str, object]:
         payload = self.summary()
@@ -173,12 +253,22 @@ class ReferenceAudit:
         payload["entries"] = [e.to_dict() for e in rows[: max(1, limit)]]
         payload["truncated"] = len(rows) > max(1, limit)
         payload["evidence"] = list(self.evidence)
+        payload["reading"] = self.reading()
+        payload["positive_predictive_value"] = POSITIVE_PREDICTIVE_VALUE
+        payload["expected_true_findings"] = self.summary()["expected_true_findings"]
         payload["caveats"] = [
             "Bu denetim yalnızca YAPISALDIR: DOI çözülmez, CrossRef sorgulanmaz, PDF okunmaz. "
             "Bir kaydın gerçekten var olduğunu kanıtlayamaz.",
-            "Tek başına kaynak denetimi suistimal kanıtı değildir. Doğrulanamayan bir kayıt, "
-            "çoğu bulunmayan meşru bir kaynak da olabilir; tez oranları için yayımlanmış "
-            "ölçüm yoktur (yukarıdaki tüm sayılar makale/konferans kayıtlarıdır).",
+            "İşaretlerin çoğu gerçek bir sorun DEĞİLDİR. HALLMARK'ın gerçek dağılım "
+            "taramasında %1-2 temel oranında en iyi doğrulayıcı bile yalnız %5-18 "
+            "teşhis oranı veriyor (gerçek bulgu başına 4-9 yanlış alarm), ve "
+            "RefChecker'ın ölçülen FPR'si %50.7 - çoğu işaret uydurma kaynak değil, "
+            "bozuk girdi çıkarımıdır (arXiv:2607.18360, arXiv:2607.00738).",
+            "Bu modülün kendi girdi çıkarımı da kaba (cümle bölme + paragraf "
+            "birleştirme), yani araştırmanın ölçtüğü aynı sınıf hatadan "
+            "kaynaklanıyor. Her işaret elle aranmalıdır.",
+            "Tezler için ölçülmüş uydurma kaynak oranı YOKTUR (yukarıdaki tüm "
+            "sayılar makale/konferans kayıtlarıdır).",
             "Kanıtlanmış risk kümelenmesi tipiktir: The Lancet 2026 denetiminde etkilenen "
             "makalelerin %91'i yalnızca 1-2 uydurma kaynak içeriyordu.",
         ]

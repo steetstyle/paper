@@ -465,7 +465,8 @@ def references(
             f"{summary['needs_review']} elden geçmeli\n"
             f"ok {summary['risk_counts']['ok']} · "
             f"note {summary['risk_counts']['note']} · "
-            f"review {summary['risk_counts']['review']}",
+            f"review {summary['risk_counts']['review']}\n"
+            f"{audit.reading()}",
             title="Kaynakça denetimi",
             expand=False,
         )

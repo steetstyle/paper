@@ -117,14 +117,15 @@ class MatchKind(StrEnum):
     texts, is evidence of reuse that the word-level matcher structurally cannot
     see.
 
-    The honest ceiling: cross-lingual recoverability is set by the *register* of
-    the source, not the language pair - 95.25% on Wikipedia against 74.10% on a
-    scientific-conference corpus (DOI 10.18653/v1/E17-2066), and a single
-    translation step costs 11-15 PlagDet points on PAN 2013. A cross-lingual hit
-    is a flag requiring manual verification, not proof; a cross-lingual miss is
-    not evidence of absence. Both halves travel in the payload, along with a
-    confidence level, because a cluster built only from recurring sample sizes and
-    thresholds can occur by coincidence.
+    The measured limits, as in
+    :mod:`checker_app.services.crosslingual`. Recoverability is set by the
+    *register* of the source, not the language pair, and the headline 74.10% is an
+    eight-method ensemble rather than a single detector (the best single method on
+    the scientific corpus is 34.49, EN→FR only, 2017-era embeddings). A
+    cross-lingual hit is a flag requiring manual verification, not proof; a
+    cross-lingual miss is not evidence of absence. Both halves travel in the
+    payload, along with a confidence level, because a cluster built only from
+    recurring sample sizes and thresholds can occur by coincidence.
     """
 
     @property

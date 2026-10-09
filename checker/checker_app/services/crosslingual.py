@@ -5,23 +5,48 @@ The problem this solves
 A word-level matcher sees *zero* overlap between a Turkish passage and the
 English paper it was translated from, so the report renders a near-verbatim
 translation as "0% overlap, clean". That is the failure mode this module exists
-to remove, and it is not hypothetical: cross-language precision is measured to
-collapse from **80%** untranslated to **26.7%** translated to **16.7%**
-translated-then-paraphrased (DOI 10.33806/ijaes1026), while PAN 2013 measured a
-single translation step costing **11-15 PlagDet points**.
+to remove.
+
+**Correction, recorded because this file previously overstated the evidence.** An
+earlier version cited two numbers that were wrong, and both are corrected here:
+
+1. *"precision collapses from 80% untranslated to 26.7% translated to 16.7%"*
+   (DOI 10.33806/ijaes1026) was presented as a general cross-lingual result. It is
+   **one** Arabic literary translation (Daly Walker, *I am the Grass*) tested with
+   three weak systems - Rabin-Karp, KNN, Word2Vec - where each figure is the best
+   system *for a different content type*, on n≈1 text, overall accuracy 23-26%. A
+   larger modern measurement points the other way: EN↔FA over 1,000 scientific
+   abstracts showed **no drop at all** for paraphrase (F1 0.97 Semi-Exact against
+   0.96 Exact; DOI 10.1371/journal.pone.0354459). Paraphrase robustness is
+   therefore model-dependent and the literature is too thin to generalise.
+
+   What survives is the weaker, defensible claim: **translation reduces lexical
+   overlap**, which is precisely why a word matcher cannot see it. The Turkish
+   measurement for that is strong - TF-IDF cosine between a Turkish source and its
+   LLM rewrite measures **0.531** (rewrite) and **0.299** (completion)
+   (DOI 10.28948/ngumuh.1930411).
+2. *"English-only models score 37.02 on EN-TR bitext against 73.07"*. Those two
+   figures are the `Mean(Task)` column, not bitext. The real EN↔TR bitext scores
+   on WMT16 are **99.43** for multilingual-e5-large and **6.78** for
+   all-MiniLM-L6-v2 (TR-MTEB, DOI 10.18653/v1/2025.findings-emnlp.471). The
+   conclusion is unchanged and stronger: the English-only family scores **6.78** of
+   100 on Turkish-English match finding, which is no signal at all.
+
+The measured register ceiling, with its real limits: Ferrero & Agnes, EACL 2017
+(DOI 10.18653/v1/E17-2066) report a decision-tree **fusion of eight methods** at
+95.25% ± 1.76 on Wikipedia and 74.10% ± 1.29 on a scientific conference corpus
+(TALN). Two caveats this file previously omitted: the best *single* method on TALN
+is **34.49**, and the study is EN→FR only with 2017-era embeddings. So 74.10 is an
+ensemble figure on one language direction, not a per-detector ceiling.
 
 Why anchors rather than embeddings
 ----------------------------------
-An embedding model would work better, and the tool already refuses to use one:
-English-only models are catastrophic on Turkish, scoring **37.02** on EN-TR
-bitext against **73.07** for a multilingual model (TR-MTEB,
-DOI 10.18653/v1/2025.findings-emnlp.471), and a 0.6-1.1 GB second model is a
-price this tool charges per sentence for a result it refuses to over-read.
-Translation also destroys the thing embeddings rely on - Kobak et al. measured
-TF-IDF cosine between a Turkish source and its LLM rewrite at **0.531**, and
-**0.299** for completion.
-
-So: anchors. What a translator leaves alone.
+An embedding model would work better, and the tool still refuses one: the
+smallest viable option is ``intfloat/multilingual-e5-small`` at 117.7M parameters
+(118 MB as ONNX int8), which is a second model the tool would load per sentence.
+Translation also destroys what embeddings rely on - see the TF-IDF figures above.
+Anchors cost nothing, run offline, and cannot be miscalibrated into a verdict
+because they never claim to be one. What a translator leaves alone.
 
 ====================  =========================================================
 anchor                why it survives translation
@@ -94,10 +119,17 @@ MIN_STRONG_ANCHORS = 2
 WINDOW_TOKENS = 90
 
 CROSS_LINGUAL_EVIDENCE = (
-    "Çapraz dil tespiti tavanı: geri kazanılabilirlik dil çiftinden çok kaynaktaki "
-    "KAYIT TÜRÜNE bağlıdır — Wikipedia'da %95.25 ± 1.76, bilimsel konferans "
-    "korpusunda %74.10 ± 1.29 (DOI 10.18653/v1/E17-2066). PAN 2013'te tek çeviri "
-    "adımı PlagDet'i 11-15 puan düşürüyor. Yani bulunan küme elle doğrulamayı "
+    "Çapraz dil tespitinin ölçülmüş sınırları: (1) Çeviri leksikal örtüşmeyi "
+    "azaltır — Türkçe kaynak ile LLM yeniden yazımı arasındaki TF-IDF kosinüsü "
+    "0.531 (rewrite), 0.299 (completion) (DOI 10.28948/ngumuh.1930411); bu yüzden "
+    "kelime eşleştirmesi göremez. (2) Geri kazanılabilirlik kaydın KAYIT TÜRÜNE "
+    "bağlıdır: Wikipedia %95.25 ± 1.76, bilimsel konferans korpusu (TALN) %74.10 "
+    "± 1.29 — ama bu sekiz yöntemin karar ağacı FÜZYONUDUR ve TALN'deki en iyi "
+    "TEK yöntem 34.49'dur; çalışma yalnız EN→FR yönünde ve 2017 gömme "
+    "modelleriyle yapılmıştır (DOI 10.18653/v1/E17-2066). (3) Paraphrase "
+    "dayanıklılığı modele bağlı ve literatür fazla ince: EN↔FA, 1.000 bilimsel "
+    "özet üzerinde hiç düşüş göstermedi (F1 0.97'e karşı 0.96; "
+    "DOI 10.1371/journal.pone.0354459). Sonuç: bulunan küme elle doğrulamayı "
     "gerektiren bir işarettir; bulunamayan küme hiçbir şey kanıtlamaz."
 )
 

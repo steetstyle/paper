@@ -365,7 +365,17 @@ def test_audit_carries_its_own_evidence_and_its_own_limits() -> None:
     caveats = " ".join(payload["caveats"])
     assert "%91" in caveats, "etkilenen makalelerin çoğunun 1-2 kaynak taşıdığı bilgisi şart"
     assert "DOI çözülmez" in caveats
-    assert "tez oranları" in caveats
+    assert "Tezler için ölçülmüş uydurma kaynak oranı YOKTUR" in caveats
+    # The PPV frame. At a 0.31-0.81% base rate even the strongest verifier gives
+    # 5-18% PPV, so "3 flags" must not read as "3 problems".
+    ppv = payload["positive_predictive_value"]
+    assert ppv["refchecker_measured_fpr"] == pytest.approx(0.507)
+    assert ppv["false_alarms_per_true_catch"] == "4-9"
+    assert "4-9 yanlış alarm" in caveats
+    assert payload["expected_true_findings"]
+    # And the module must name its own extraction as the weak link the research
+    # identified as the dominant false-positive source.
+    assert "girdi çıkarımı" in caveats
 
 
 def test_audit_is_empty_without_a_bibliography() -> None:

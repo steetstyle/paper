@@ -551,15 +551,30 @@ Yayımlanmış bir tablo bulunmadığı için **4.462 pre-ChatGPT arXiv özeti**
 
 | Bulgu | Sayı | Kaynak |
 |---|---|---|
-| Wikipedia korpusunda çapraz dil | **%95.25 ± 1.76** | DOI 10.18653/v1/E17-2066 |
-| **Bilimsel konferans korpusunda (TALN)** | **%74.10 ± 1.29** | aynı |
+| Wikipedia korpusunda çapraz dil (8 yöntemin karar ağacı **füzyonu**) | **%95.25 ± 1.76** | DOI 10.18653/v1/E17-2066 |
+| **Bilimsel konferans korpusunda (TALN), aynı füzyon** | **%74.10 ± 1.29** | aynı |
+| **TALN'deki en iyi TEK yöntem (CL-WESS)** | **34.49** | aynı |
+| Çalışmanın kapsamı | **yalnız EN→FR**, 2017 gömme modelleri | aynı |
 | PAN 2013'te tek çeviri adımı | PlagDet **11–15 puan** düşüş | CLEF 2013 |
 | Türkçe MKQA çapraz dil getirme | 25 dil ortalamasının **üstünde** (BGE-M3 69.6 vs 65.8) | arXiv:2407.19669 |
-| Yalnız-İngilizce gömme, TR bitext | all-MiniLM **37.02** vs multilingual-e5 **73.07** | DOI 10.18653/v1/2025.findings-emnlp.471 |
+| **EN↔TR bitext (WMT16), doğru rakamlar** | multilingual-e5-large **99.43** · all-MiniLM-L6-v2 **6.78** | DOI 10.18653/v1/2025.findings-emnlp.471 |
+| EN↔TR bitext, aynı boyutta alternatif | gte-multilingual-base 97.98 · multilingual-e5-small 97.46 (117.7M, 118 MB int8) | aynı |
+| EN↔FA paraphrase, 1.000 bilimsel özet | **düşüş yok**: Semi-Exact F1 0.97, Exact 0.96 | DOI 10.1371/journal.pone.0354459 |
 
-> **Karar:** İngilizce akademik kaynak içinde tespit ~%74 bandında olmalıdır,
-> Wikipedia'ın %95'i değil. Doğrulama kümesi Wikipedia değil, bilimsel kayıt
-> olmalıdır.
+> **Düzeltme (5. tur).** Bu bölüm önce iki yanlış rakam içeriyordu ve ikisi de
+> düzeltildi: (a) *"%80 → %26.7 → %16.7 çeviri altında çöküyor"* genel bir sonuç
+> gibi sunulmuştu; o sıra **tek** bir Arap edebiyat çevirisinde (Daly Walker,
+> *I am the Grass*) üç zayıf sistemle ölçülmüş ve her sayı farklı içerik türü
+> için **en iyi** sistemdir, genel doğruluk %23–26. Daha büyük ve modern bir
+> ölçüm (EN↔FA, 1.000 özet) paraphrase'ta **hiç düşüş göstermiyor**. (b)
+> TR-MTEB'de *37.02 / 73.07* rakamları `Mean(Task)` sütunuydu, bitext değil;
+> doğru rakamlar **6.78 / 99.43** — yani İngilizce-only model ailesi
+> Türkçe-İngilizce eşleştirmede **100 üzerinden 6.78**, yani hiç sinyal yok.
+>
+> **Karar:** İngilizce akademik kaynakta beklenti tek bir yöntemin %74'ü değil,
+> **füzyonun** %74'üdür; doğrulama kümesi Wikipedia değil bilimsel kayıt olmalıdır.
+> Gömmeye geçilirse tek aday `intfloat/multilingual-e5-small` (117.7M, 118 MB
+> int8, EN↔TR 97.46); all-MiniLM ailesi **elenir** (6.78).
 
 ### 2.1b Çapraz dil: çeviriyle gelen aktarımlar
 
@@ -568,11 +583,12 @@ noktasıdır. Ölçülen tavan:
 
 | Bulgu | Sayı | Kaynak |
 |---|---|---|
-| Kesinlik: çeviri yok / çeviri / çeviri+paraphrase | **%80** / **%26.7** / **%16.7** | DOI 10.33806/ijaes1026 |
 | PAN 2013 tek çeviri adımı | PlagDet **11–15 puan** düşüş | CLEF 2013 |
-| **Kayıt türü** tavanı belirliyor: Wikipedia / bilimsel konferans | **%95.25 ± 1.76** / **%74.10 ± 1.29** | DOI 10.18653/v1/E17-2066 |
-| TR bitext'te yalnız-İngilizce gömme | all-MiniLM **37.02** vs multilingual-e5 **73.07** | DOI 10.18653/v1/2025.findings-emnlp.471 |
+| **Kayıt türü** tavanı belirliyor: Wikipedia / bilimsel konferans | **%95.25 ± 1.76** / **%74.10 ± 1.29** (8 yöntem füzyonu; en iyi tek yöntem TALN'de 34.49) | DOI 10.18653/v1/E17-2066 |
+| EN↔TR bitext (WMT16) | multilingual-e5-large **99.43**; all-MiniLM-L6-v2 **6.78** | DOI 10.18653/v1/2025.findings-emnlp.471 |
 | TR kaynak → LLM rewrite leksikal örtüşme | TF-IDF kosinüs **0.531** (rewrite), 0.299 (completion) | DOI 10.28948/ngumuh.1930411 |
+| EN↔FA paraphrase (1.000 bilimsel özet) | **düşüş yok**: 0.97'e karşı 0.96 | DOI 10.1371/journal.pone.0354459 |
+| Tek Arap çevirisi + 3 zayıf sistem | kesinlik %80 / %26.7 / %16.7, **genel doğruluk %23–26** — n≈1, zayıf kanıt | DOI 10.33806/ijaes1026 |
 
 > **Karar:** `services/crosslingual.py` — gömme yerine **çeviri dayanıklı çapa**.
 > Sayılar, ondalık hassasiyet, kimlikler, Latin alfabesi özel adlar, yazar–yıl
@@ -841,7 +857,7 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 | TR perplexity kalibrasyonu | insan medyan log10 ≈ 1.55, AI-benzeri ≈ 1.38 | `scripts/calibrate.py` |
 | EN perplexity kalibrasyonu | insan ≈ 1.69, AI-benzeri ≈ 1.39 | aynı |
 | Kod AST testleri | 12 | `tests/test_code_ast.py` |
-| Toplam test | 332, model indirmeden ~5 sn | `make test` |
+| Toplam test | 334, model indirmeden ~5 sn | `make test` |
 | MCP uçtan uca | 11 araç gerçek stdio istemcisiyle | `make mcp-test` |
 | Raporlama tabanı ölçümü (yalnız stilometri, modeller kapalı) | gerçekçi TR giriş metni AI payı **%0.0**; jenerik metin **%57.7** | `tests/test_mcp.py` |
 | Kalibrasyon koruması, gerçek korpusta | 9 örnek (6 insan + 3 AI cümle) → **ölçülmedi**, "olasılık olarak okunamaz" | `checker calibrate --human-dir … --machine-dir …` |

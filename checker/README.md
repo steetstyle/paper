@@ -176,6 +176,25 @@ makullüğü, yazar biçimi, yayın yeri, bozuk kimlik. DOI çözülmez, CrossRe
 sorgulanmaz. Tek eksik alan işaretlenmez bile — DOI'siz basılı Türkçe kaynak
 meşrudur; yükseltme yalnız **küme** ile olur.
 
+**Rapor, işaret sayısının ne anlama gelmediğini de söyler.** HALLMARK'ın gerçek
+dağılım taramasında (arXiv:2607.18360) %1–2 temel oranında **en iyi doğrulayıcı
+bile yalnız %5–18 teşhis oranı** veriyor — gerçek bir bulgu başına **4–9 yanlış
+alarm**. Referans başına ölçülen uydurma oranı ise %0.31–0.81 (Phantom
+References, arXiv:2607.00738).
+
+Daha rahatsız edici bulgu: RefChecker'ın ölçülen FPR'si **%50.7** — 71 gerçek
+referansın 36'sı yanlış işaretlenmiş — ve Phantom References bunların çoğunun
+*uydurma kaynak* olmadığını, **girdi çıkarımı** olduğunu açıkça söylüyor: bozuk
+yazar dizisi, kırpılmış başlık, editörün yazar sayılması, iki gerçek makalenin
+başlık çakışması. Bu modülün kendi girdi çıkarımı da kaba, dolayısıyla **her
+işaret elle aranmalı**.
+
+> Aynı çalışmanın en ucuz ve en değerli bulgusu: veritabanları sabitken
+> "herhangi bir kaynakta bulunamadı → işaretle" kuralı FPR **0.729** üretirken,
+> "**tüm** kaynaklarda bulunamadı → işaretle" kuralı FPR'yi **0.049**'a indirir —
+> **~15 kat**, ek veri kaynağı olmadan, sıfır maliyetle. Bu yüzden bu modül
+> "bulunamadı"yı hiçbir zaman tek başına gerekçe saymaz.
+
 > Çözümleyicinin başarısız olma biçimi yanlış suçlamadır: PAN-2025'te naif
 > tabanlar gerçek metni uydurulmuş intihalin ~2 katı oranında işaretledi.
 > Tezler için ölçülmüş bir uydurma kaynak oranı **yayımlanmamıştır**.
@@ -242,9 +261,10 @@ okunabileceği anlamına gelmez.
 
 Kelime eşleştirmesi, çevrilmiş bir aktarımı **%0 benzerlik** olarak raporlar.
 Bu en kötü cevaptır: temize çeviriliyor gibi görünür ama aslında bir körlük
-noktasıdır. Ölçülen: çeviri yokken kesinlik **%80**, çeviride **%26.7**,
-çeviri+paraphrase'ta **%16.7** (DOI 10.33806/ijaes1026); PAN 2013'te tek çeviri
-adımı PlagDet'i **11–15 puan** düşürüyor.
+noktasıdır. Ölçülen: PAN 2013'te tek çeviri adımı PlagDet'i **11–15 puan**
+düşürüyor; Türkçe kaynak ile LLM yeniden yazımı arasındaki TF-IDF kosinüsü
+**0.531** (DOI 10.28948/ngumuh.1930411) — çeviri leksikal örtüşmeyi gerçekten
+azaltır, kelime eşleştirmesinin görememesinin nedeni budur.
 
 Çözüm gömme değil, **çevirinin bıraktıkları**:
 
@@ -264,11 +284,13 @@ Bu, HyPlag'ın greedy tiling fikrinin başka bir alfabeye uygulanışıdır: sı
 gelen yeniden kullanılmış *birimleri* say, ortak kelimeleri değil — ki MRR'ı
 sırasız ölçüme karşı **0.79'a 0.58** çıkaran yapı budur.
 
-**Neden gömme yok:** İngilizce-only modeller Türkçede felaket — TR bitext'te
-all-MiniLM **37.02**, multilingual-e5 **73.07** (TR-MTEB); 0.6–1.1 GB'lik ikinci
-bir model ise her cümle için ücret demek. Ayrıca çeviri gömmenin dayandığı şeyi
-yok ediyor: Kobak vd. Türkçe kaynak ile LLM yeniden yazımı arasındaki TF-IDF
-kosinüsünü **0.531** (rewrite), **0.299** (completion) ölçtü.
+**Neden gömme yok:** İngilizce-only modeller Türkçede **hiç sinyal vermiyor** —
+TR bitext'te (WMT16 EN-TR) all-MiniLM-L6-v2 **6.78**, multilingual-e5-large
+**99.43** (TR-MTEB, DOI 10.18653/v1/2025.findings-emnlp.471; *37.02 ve 73.07
+rakamları `Mean(Task)` sütunudur, bitext değil — önceki sürümde bu atıfı
+kullanmıştık*). Gömmeye geçilirse tek aday `intfloat/multilingual-e5-small`
+(117.7M parametre, 118 MB int8, EN↔TR **97.46**); all-MiniLM ailesi elenir.
+Ayrıca çeviri gömmenin dayandığı şeyi yok ediyor (yukarıdaki kosinüs).
 
 ### Küme güven dereceleri — abartmamak için
 
@@ -283,10 +305,12 @@ küme tesadüfen oluşabilir. Bu yüzden:
 | `medium` | ≥6 çapa, ya da özel ad içeren daha küçük küme |
 | `review` | yalnız sayılardan oluşan kısa küme — tek başına anlamsız |
 
-Okuma metni **"kanıt değil işarettir"** der ve elle doğrulama ister. Ölçülen
-tavan raporla birlikte gider: Wikipedia'da %95.25, **bilimsel konferans
-korpusunda %74.10** (DOI 10.18653/v1/E17-2066). Yani bulunan küme doğrulamayı
-gerektiren bir işarettir; **bulunamayan küme hiçbir şey kanıtlamaz.**
+Okuma metni **"kanıt değil işarettir"** der ve elle doğrulama ister. Ölçülen tavan
+raporla birlikte gider: Wikipedia'da %95.25, **bilimsel konferans korpusunda
+%74.10** (DOI 10.18653/v1/E17-2066) — ama bu rakam **sekiz yöntemin karar ağacı
+füzyonudur** ve o korpusta en iyi **tek** yöntem **34.49**'dur; çalışma yalnız
+EN→FR yönünde ve 2017 gömme modelleriyle yapılmıştır. Yani bulunan küme
+doğrulamayı gerektiren bir işarettir; **bulunamayan küme hiçbir şey kanıtlamaz.**
 
 ## Söylem profili
 
@@ -588,7 +612,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             332 test, model indirmeden
+├── tests/             334 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```
