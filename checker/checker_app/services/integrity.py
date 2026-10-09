@@ -93,6 +93,11 @@ _REPEAT_PUNCT_RE = re.compile(r"([!?.,;:])\1{2,}")
 _EMOJI_RE = re.compile("[\U0001f300-\U0001faff☀-➿]")
 
 
+def _neighbours(text: str, match: re.Match[str]) -> str:
+    """The two characters immediately around a match, for context tests."""
+    return text[match.start() - 1 : match.start()] + text[match.end() : match.end() + 1]
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrityFinding:
     """One concrete observation about the bytes of the file."""
@@ -140,18 +145,51 @@ class IntegrityReport:
         }
 
     def as_degradation(self) -> str | None:
-        """A one-line reason to distrust the AI scores, or ``None``."""
+        """A one-line reason to distrust the AI scores, or ``None``.
+
+        Says which finding fired, because the reasons differ: a homoglyph mix is a
+        substitution, while a zero-width or soft-hyphen character is an insertion,
+        and calling both "character-level modification" describes neither.
+        """
         if not self.tampered:
             return None
-        codes = ", ".join(f.code for f in self.findings if f.code in _TAMPER_CODES)
+        reasons: list[str] = []
+        for finding in self.findings:
+            if finding.code not in _TAMPER_CODES:
+                continue
+            if finding.code == "homoglyph":
+                reasons.append(
+                    "homoglif ikamesi (RAID: ortalama doğruluk düşüşü %40.6)"
+                )
+            elif finding.code == "zero_width":
+                reasons.append("görünmez karakter eklenmiş")
+            elif finding.code == "soft_hyphen":
+                reasons.append("yumuşak tire eklenmiş")
+        codes = ", ".join(
+            f.code for f in self.findings if f.code in _TAMPER_CODES
+        )
         return (
-            f"metin karakter düzeyinde değiştirilmiş ({codes}); "
-            "AI sinyalleri güvenilmez kabul edilmeli "
-            "(RAID: homoglyph altında ortalama doğruluk düşüşü %40.6)"
+            f"metin bütünlüğü şüpheli ({codes}): {'; '.join(reasons)}. "
+            "AI sinyalleri güvenilmez kabul edilmeli."
         )
 
 
-_TAMPER_CODES = frozenset({"homoglyph", "zero_width", "soft_hyphen", "repeat_punctuation"})
+#: Codes that on their own mean the byte stream was tampered with, and therefore
+#: that the AI signals must be treated as unreliable.
+#:
+#: ``repeat_punctuation`` was in this set and measurement removed it. Three real
+#: theses, two fields, every match legitimate: an elided author list
+#: ("......., Takey"), ADS bibliographic codes ("A&A...534A..120T"), set-builder
+#: notation, and the functional-calculus integrals a control thesis is full of
+#: ("∫[Dφ1...Dφn]", "ξ(θ1...θn)"). Legitimate documents produced 3, 5 and 10
+#: occurrences, and not one real instance of quote manipulation was found to
+#: calibrate a threshold against.
+#:
+#: A signal that cannot be calibrated must not move a verdict, so the observation
+#: still appears in the report - a reader can look - but it no longer declares a
+#: 60,000-word thesis tampered and throws away its AI scores. That is the same
+#: rule the reporting floor follows: no calibrated evidence, no claim.
+_TAMPER_CODES = frozenset({"homoglyph", "zero_width", "soft_hyphen"})
 
 
 def check_integrity(text: str) -> IntegrityReport:
@@ -200,42 +238,31 @@ def check_integrity(text: str) -> IntegrityReport:
             )
         )
 
-    greek_words = [
-        word
-        for match in _WORD_RE.finditer(text)
-        if (word := match.group(0))
-        and any(ch in _GREEK for ch in word)
-        and any(ch.isalpha() and ch not in _GREEK for ch in word)
-    ]
-    if greek_words:
-        # Informational only. In a scientific text this is notation ("hν",
-        # "ǫν"), which is what it almost always is; a Cyrillic mix is not.
-        findings.append(
-            IntegrityFinding(
-                code="greek_notation",
-                count=len(greek_words),
-                detail=(
-                    "Latin yazıyla karışan Yunan harfleri bulundu. Bilimsel metinde "
-                    "bu genellikle gösterimdir (hν, ǫν) ve tek başına sorun değildir; "
-                    "homoglif saldırısı için bakılacak harf Kiril'dir."
-                ),
-                examples=tuple(greek_words[:5]),
-                severity="low",
-            )
-        )
+    # Greek mixed into Latin is *not* reported as a finding. It was tempting to
+    # surface it as informational, and measurement killed that: arXiv:1911.03731,
+    # a machine-learning thesis, contains 316 such tokens - hν, λ, θ, α, β, μ -
+    # which is what a thesis about learning rules looks like. A finding with no
+    # action attached to it is noise, and noise costs the reader the attention
+    # that the real findings need. The protection that matters - Greek is
+    # notation, Cyrillic is the homoglyph vector - lives in the rule above.
 
-    # Repeated punctuation touching a digit is notation, not manipulation.
+    # Repeated punctuation is an ellipsis marker unless it sits against words or
+    # quotes. Measured on three real theses, every match was legitimate:
     #
-    # Measured on a real astrophysics thesis (arXiv:1407.6566), every one of the
-    # five matches was legitimate: a math range "M^0.1...0.6" written twice, and
-    # two ADS bibliographic codes "A&A...534A..120T" and "A&A...558A..75T". All
-    # of them sit against a digit. A run that follows words - "......., Takey"
-    # with an elided author list - is a different thing, and is still reported.
+    # - arXiv:1407.6566 (astrophysics): the math range "M^0.1...0.6" twice, and
+    #   two ADS bibliographic codes, "A&A...534A..120T" and "A&A...558A..75T".
+    # - arXiv:1911.03731 (machine learning): 64 instances, all display-math -
+    #   set-builder notation "(x1, h'(x1)), ..., (xm, h'(xm))" and the vertical
+    #   ellipsis of a matrix, which a text extractor renders as "... . . . ...".
+    #
+    # In all of them the run is surrounded by whitespace, a digit, or a closing
+    # bracket. A run that touches a letter or a quote is a different shape - an
+    # elided author list "......., Takey", or a quoted "..." - and is reported.
     repeats = [
         match.group(0)
         for match in _REPEAT_PUNCT_RE.finditer(text)
-        if not (text[match.start() - 1 : match.start()].isdigit())
-        and not (text[match.end() : match.end() + 1].isdigit())
+        if len(match.group(0)) != 3
+        or any(ch.isalpha() or ch in "\"'" for ch in _neighbours(text, match))
     ]
     if len(repeats) >= 3:
         findings.append(

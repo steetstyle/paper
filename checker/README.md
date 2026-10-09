@@ -377,6 +377,39 @@ vardı ve ikisi de gerçek ölçümle bulundu:
 
 Sonuç: 189 gerçek kaynakta **9 review → 2**, ikisi de çıkarım artefaktı.
 
+### İkinci tur: iki tez daha, iki alan
+
+Aynı ölçüm iki farklı tezde tekrarlanınca ikinci bir hata ortaya çıktı: **bütünlük
+denetimleri bilimde ağlıyordu**.
+
+| tez | alan | sözcük | bölüm | kaynakça | `tampered` |
+|---|---|---:|---:|---:|---|
+| 1407.6566 | Astrofizik (LaTeX) | 60.238 | 84 | ✓ | yanlış → **doğru** |
+| 2306.14650 | YZ (Fransızca-Türkçe) | 42.094 | 56 | ✓ | yanlış → **doğru** |
+| 1911.03731 | ML (İngilizce) | 45.889 | 72 | ✓ | yanlış → **doğru** |
+
+`repeat_punctuation` sinyali **hiç ayırt etme gücü taşımıyordu**. Üç gerçek tezde
+tüm eşleşmeler meşruydu:
+
+- elips: `......., Takey`, `j1, j2, ....`
+- ADS kodu: `A&A...534A..120T`
+- **display-math**: `(x1, h'(x1)), ..., (xm, h'(xm))` ve matrisin dikey elipsi,
+  ki metin çıkarıcı onu `... . . . ...` olarak yazıyor — ML tezinde **64 adet**
+- fonksiyonel analiz: `∫[Dφ1...Dφn]`, `ξ(θ1...θn)`
+
+Meşru belgeler 3, 5 ve 10 eşleşme üretti ve **kalibrasyon için tek bir gerçek
+quote-manipülasyon örneği bulunamadı**. Bu yüzden gözlem raporda duruyor ama artık
+tek başına 60.000 sözcüklük bir tezi "manipüle" sayıp AI skorlarını düşürmüyor.
+Kalibre edilemeyen sinyal hüküm dönüştürmez — raporlama tabanının da izlediği kural.
+
+Ayrıca `greek_notation` bulgusu **kaldırıldı**: ML tezinde 316 örnek (hν, λ, θ, α,
+β, μ) veriyor, yani eyleme bağlı olmayan bir bulgu salt gürültü. Korunması gereken
+şey zaten homoglif kuralının içinde: Yunan gösterim, Kiril saldırı vektörü.
+
+Ve bozukluk mesajı artık **hangi bulgunun** tetiklediğini söylüyor: homoglif bir
+*ikame*, görünmez karakter bir *ekleme* — ve RAID'in ölçtüğü %40.6 düşüş ikamesine
+ait, eklemeye değil.
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -677,7 +710,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             369 test, model indirmeden
+├── tests/             372 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

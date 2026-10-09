@@ -53,12 +53,16 @@ def test_physics_notation_is_not_a_homoglyph() -> None:
     assert not report.tampered
 
 
-def test_greek_notation_is_still_reported_but_only_as_information() -> None:
-    """Visible, low severity, and not counted as tampering."""
+def test_greek_notation_is_not_a_finding_at_all() -> None:
+    """It was tempting to report it as informational, and measurement killed that.
+
+    arXiv:1911.03731, a machine-learning thesis, has 316 such tokens - hν, λ, θ,
+    α, β, μ - which is what a thesis about learning rules looks like. A finding
+    with no action attached to it is noise, and noise costs the reader the
+    attention that the real findings need.
+    """
     report = check_integrity(PROSE + "The photon energy is hν and the parameter ǫν.")
-    notation = [f for f in report.findings if f.code == "greek_notation"]
-    assert notation, "gösterim yine de görünmeli"
-    assert notation[0].severity == "low"
+    assert not report.findings, f"gösterim bulgu olmamalı: {report.findings}"
     assert not report.tampered
 
 
@@ -95,6 +99,43 @@ def test_quote_run_manipulation_is_still_reported() -> None:
     assert "repeat_punctuation" in {f.code for f in report.findings}
 
 
+def test_display_math_ellipses_are_not_punctuation_manipulation() -> None:
+    """Sixty-four instances on arXiv:1911.03731, every one of them a formula.
+
+    Set-builder notation and the vertical ellipsis of a matrix, which a text
+    extractor renders as "... . . . ...".
+    """
+    report = check_integrity(
+        PROSE
+        + "A training set z = {(x1, h'(x1)), ..., (xm, h'(xm))} over Z: "
+        + "z11 ... z1n ... ... ... zm1 ... zmn and dP1(z1)...dPn(zn) = 1. "
+    )
+    assert "repeat_punctuation" not in {f.code for f in report.findings}
+    assert not report.tampered
+
+
+def test_repeated_punctuation_cannot_alone_invalidate_the_ai_scores() -> None:
+    """A signal with no calibration must not move a verdict.
+
+    Three real theses, two fields, every match legitimate - elided author lists,
+    ADS codes, functional-calculus integrals - producing 3, 5 and 10 occurrences.
+    Not one real instance of quote manipulation was found to calibrate against, so
+    the observation still appears but it no longer declares a thesis tampered.
+    """
+    elided = "de Hoon, A., Lamer, G., ......., Takey, A. 2010. "
+    bibcode = "Astronomy & Astrophysics, 2011A&A...534A..120T "
+    integral = "the action S(φ1) +... +iS(φn) and ∫[Dφ1...Dφn] exp(iS) "
+
+    seen = check_integrity(PROSE + elided * 3 + bibcode * 3 + integral * 3)
+    assert "repeat_punctuation" in {f.code for f in seen.findings}, "gözlem görünmeli"
+    assert not seen.tampered, "ama tek başına hüküm döndürmemeli"
+
+
+def test_homoglyph_still_can_invalidate() -> None:
+    """The other direction: the calibrated signal keeps its authority."""
+    assert check_integrity(PROSE + "The рареment was sent. ").tampered
+
+
 # ------------------------------------------------------------- the whole doc
 def test_a_physics_thesis_is_not_declared_tampered() -> None:
     """The end-to-end property: no false alarm on 60,000 words of science."""
@@ -109,9 +150,15 @@ def test_a_physics_thesis_is_not_declared_tampered() -> None:
     assert "homoglyph" not in {f.code for f in report.findings}
 
 
-def test_the_distinction_is_reported_not_hidden() -> None:
-    """Narrowing the rule must not mean losing the observation."""
-    findings = check_integrity(PROSE + "The energy is hν.").findings
-    described = " ".join(f.detail for f in findings)
-    assert "gösterim" in described
-    assert "Kiril" in described, "homoglif için bakılacak alfabenin adı geçmeli"
+def test_the_distinction_is_enforced_not_merely_documented() -> None:
+    """Both alphabets in one sentence, and only the Cyrillic one is flagged."""
+    report = check_integrity(
+        PROSE + "The energy is hν and the рареment was distributed to сonneсted units."
+    )
+    codes = {f.code for f in report.findings}
+    assert "homoglyph" in codes
+    assert report.tampered
+
+    homoglyph = next(f for f in report.findings if f.code == "homoglyph")
+    assert "Kiril" in homoglyph.detail, "hangi alfabenin arandığı belirtilmeli"
+    assert "hν" not in homoglyph.examples, "gösterim homoglif sayılmamalı"

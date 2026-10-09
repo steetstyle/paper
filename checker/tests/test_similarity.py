@@ -215,11 +215,23 @@ def test_soft_hyphen_and_repeated_punctuation() -> None:
 
 
 def test_degradation_reason_cites_the_raid_number() -> None:
+    """The RAID figure belongs to the homoglyph finding specifically.
+
+    A zero-width character is an insertion, not a substitution, and the measured
+    40.6% accuracy drop is about substitutions. Quoting it for both would describe
+    neither, so the reason names the finding it is quoting.
+    """
     assert check_integrity("normal metin").as_degradation() is None
-    report = check_integrity("Bu metin\u200bgizli karakter içeriyor.")
-    reason = report.as_degradation()
-    assert reason and "40.6" in reason
+
+    hidden = check_integrity("Bu metin\u200bgizli karakter içeriyor.")
+    reason = hidden.as_degradation()
+    assert reason and "görünmez karakter" in reason
     assert "güvenilmez" in reason
+    assert "40.6" not in reason, "insertion için substitution rakamı alıntılanmamalı"
+
+    substituted = check_integrity("The рареment was sent to units.")
+    homoglyph_reason = substituted.as_degradation()
+    assert homoglyph_reason and "40.6" in homoglyph_reason
 
 
 def test_emoji_is_a_style_note_not_tampering() -> None:
