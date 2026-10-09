@@ -958,6 +958,10 @@ def _render_report(report: DocumentReport, *, level: RiskLevel, limit: int, show
     )
     if report.models:
         verdict.append("modeller: " + ", ".join(report.models.values()) + "\n", style="dim")
+    if report.turkish_fpr and report.language == "tr":
+        # Only worth a line in the terminal when the document is Turkish: these
+        # are the rates measured on Turkish academic prose specifically.
+        verdict.append("kanıt · Türkçe ölçülmüş dedektör FPR'ları raporun sonunda\n", style="dim")
     _render_context(report, verdict)
     if report.degraded_signals:
         verdict.append("çalışmayan: " + "; ".join(report.degraded_signals) + "\n", style="yellow")

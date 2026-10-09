@@ -93,6 +93,8 @@ def to_markdown(
         lines.append(f"> **{report.degree_caveat}**\n")
     if report.human_baseline:
         lines.append(f"> **{report.human_baseline}**\n")
+    if report.turkish_fpr:
+        lines.append(f"> **{report.turkish_fpr}**\n")
 
     if report.sections:
         lines.append("\n## Bölümler\n")

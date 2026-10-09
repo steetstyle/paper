@@ -49,6 +49,7 @@ from checker_app.services.references import audit_references
 from checker_app.services.scoring import (
     AI_DEGREE_CAVEAT,
     AI_HUMAN_BASELINE,
+    AI_TURKISH_FPR,
     DISCLAIMER,
     Scorer,
     is_prose,
@@ -342,6 +343,7 @@ class ScanRunner:
             disclaimer=DISCLAIMER,
             degree_caveat=AI_DEGREE_CAVEAT,
             human_baseline=AI_HUMAN_BASELINE,
+            turkish_fpr=AI_TURKISH_FPR,
         )
 
     def diff(self, left_text: str, right_text: str) -> tuple[SentenceDiff, ...]:

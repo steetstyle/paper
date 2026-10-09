@@ -277,7 +277,12 @@ def test_the_report_carries_its_own_limits() -> None:
     payload = reliability_report([(0.02, 0.0)] * 20 + [(0.98, 1.0)] * 20).to_dict()
     caveats = " ".join(payload["caveats"])
     assert "suistimal kanıtı değildir" in caveats
-    assert "Türkiye" in caveats, "TR'de yayımlanmış AUROC/FPR yok uyarısı şart"
+    assert "TR işletim noktası" in caveats, "TR işletim noktasının kaynağı açıklanmalı"
+    # The operative claim is *why this tool measures its own point*, not that no
+    # Turkish number exists: published ones are given, with their best result
+    # and the register it was measured on.
+    assert "AUROC %99.31" in caveats
+    assert "başka bir çalışmadan alınmaz" in caveats
 
 
 def test_calibration_result_carries_a_reliability_block() -> None:

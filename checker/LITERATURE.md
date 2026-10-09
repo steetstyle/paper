@@ -15,6 +15,13 @@ kendi kendine intihal ölçütleri, kurumsal temyiz protokolleri. O turun bulgul
 kaldırıldı: "PPBS" diye bir metrik yok (§2.2b notu) ve "LWAI" kaynağı
 bulunamadı (§5).
 
+**Üçüncü tur** Türkçe kaynaklara ve çapraz dile yöneldi ve **kendi iddiamızı
+çürüttü**: "Türkçe'de hiçbir dedektörün yayımlanmış AUROC/FPR değeri yok"
+yanlıştı (§1.14). Daha önemlisi, §1.13'teki ölçüm aracın tasarımını doğruluyor:
+8 dedektör, %100 insan Türkçe akademik metinde %89'a varan AI iddiasında bulundu
+ve aynı içerik Fransızca'da %0, Türkçe çevirisinde %73.25 okundu. İkinci negatif
+— Türkçe **tez** benzerlik dağılımı — doğrulandı.
+
 ---
 
 ## 1. AI yazım tespiti
@@ -241,7 +248,143 @@ gösterir; gerçek korpusta (6+3 cümle) doğru biçimde ölçülmedi.
 ezberler ve hiçbir yere taşınmaz. Sıcaklık yalnız güveni yeniden ölçekler;
 korporadaki gerçek serbestlik bu kadarı.
 
-### 1.13 Ölçülebilir doğrulama: `scripts/measure_ratio.py`
+### 1.13 Türkçe: dedektörlerin ölçülmüş başarısızlığı
+
+Bu, tez yazımı odaklı bir araç için en önemli bulgudur ve **Türkçe akademik
+metin üzerinde** ölçülmüştür.
+
+**Altıntop (2026)**, *Akademik Yayınlarda Kullanılan Yapay Zekâ Detektörlerinin
+Güvenilirliği Üzerine Bir İnceleme*, DOI **10.56493/nkusbmyo.1866431**. 8 dedektör,
+**hiçbir aşamada AI kullanılmadan** yazılmış 5.715 kelime / 40.407 karakterlik
+Türkçe bir akademik metin üzerinde:
+
+| Dedektör | %100 insan metne verdiği karar |
+|---|---|
+| **Justdone** | **%89 AI** |
+| **ZeroGPT** | ~%80 AI (75.29% "büyük olasılıkla AI" + 21.14% "kısmen AI") |
+| **Sidekicker** | "yapay zekâ üretimi işaretleri" (yüksek) |
+| **MyDetector** | "büyük olasılıkla %40 AI üretimi" |
+| **TruthScan** | %40 AI |
+| QuillBot AI / Smodin / Copyleaks | %0 AI |
+
+Aynı metin intihal motorlarında **tutarlı**: Turnitin %9 (yalnız alıntı filtresi) /
+%4 (alıntı + kaynakça hariç), İntihal.net %10 / %6. Yazarların sonucu: hatalar
+dedektörlerdedir.
+
+**Dil etkisi, çapraz dil aracı için ölümcül.** Aynı çalışma Derrida'nın
+*Plato's Pharmacy* "4. PHARMAKON" sayfasını üç dilde tarıyor:
+
+| Dedektör | TR (2012 çeviri) | FR (1972 orijinal) | EN (1981 çeviri) |
+|---|---|---|---|
+| **ZeroGPT** | **%73.25 AI** | **%0 AI** | %3 AI |
+| Sidekicker | %92 AI | %72 AI | %94 AI |
+| QuillBot AI | %0 AI | %0 AI | %1 AI |
+
+**73 puanlık salınım yalnızca dilden.** Aynı çalışma 1776 ABD Bağımsızlık
+Bildirgesi'nin bazı dedektörlerce **%99.99 AI** sayıldığını da aktarıyor.
+
+> **Karar:** `AI_TURKISH_FPR` her raporla birlikte döner. Araç hiçbir
+> dedektör puanını olduğu gibi sunmaz; kendi ölçülmüş işletim noktasını kullanır
+> ve `checker calibrate` ile kullanıcının kendi korpusunda yeniden ölçtürür.
+
+### 1.14 Türkçe dedektör AUROC/FPR: sayılar var, teze taşmıyor
+
+**Renklier & Sarıtaş (2026)**, DOI **10.28948/ngumuh.1930411**: 3.000 insan +
+9.000 AI Türkçe metin (6 LLM × 3 senaryo × 5 alan), 11.990 temiz örnek,
+kaynak-gruplu 70/10/20 bölme.
+
+| Model | AUC-ROC | F1 |
+|---|---|---|
+| BERTurk (önerilen) | **99.31** | 98.37 |
+| XLM-RoBERTa-base | 99.34 | 97.63 |
+| mBERT | 98.86 | 97.19 |
+| TF-IDF + SVM | 97.06 | 93.80 |
+
+5 katmanlı grup-duyarlı CV: AUC-ROC **99.66 ± 0.15**, F1 98.56 ± 0.24.
+Özgüllük **94.16**, recall 98.67 → **FPR = %5.84** (2.398 test örneği).
+
+**Ama teze en yakın iki alanda en düşük:**
+
+| Dilim | Doğruluk |
+|---|---|
+| haber / ödev | 99.79 / 99.58 |
+| **akademik** | **95.21** |
+| **mevzuat-hukuk** | **94.99** |
+| senaryo: **yeniden yazım (rewrite)** | **96.51** (tam üretim 100.00) |
+| uzunluk: 30–100 kelime | **94.2** (300–600 kelime 96.8) |
+
+> **Karar:** Bu sayılar **başka bir çalışmadan alınmaz**. Tez metni akademik
+> alandadır (95.21) ve yeniden yazım %96.51 ile en zor senaryodur — tez yazımında
+> en olası kaçınma yolu. Araca özgü ölçüm gerekir.
+
+### 1.15 Türkçede ölçülmüş dilbilimsel bulgular
+
+| Bulgu | Sayı | Kaynak |
+|---|---|---|
+| **TTR sınıfları ayırmaz** | insan **0.756**; LLM aralığı **0.709–0.808** (Claude ve DeepSeek insanlardan *daha zengin*) | DOI 10.28948/ngumuh.1930411 |
+| Türkçe LLM metni **daha kısa** | insan 234.7 kelime; LLM 141.2–184.8 (**%21–40 kısa**) | aynı |
+| İnsan Türkçe **en yüksek** alt-kelime parçalanması | 1.522 token/kelime — her LLM'nin üstünde | aynı |
+| LLM yeniden yazımı kaynakla leksikal örtüşmeyi yok eder | TF-IDF kosinüs: rewrite **0.531**, completion 0.299 | aynı |
+| Jeneratör değişince Türkçe çöker | alan içi F1 **0.96–1.00** → alan dışı sıfır-shot **0.33–0.42** | arXiv:2408.10724 |
+| Türkçe çapraz dil intihal tespiti | **TÜM** PAN / SemEval-2024 / GenAI-2025 görevlerinde yok | §5 |
+| Çeviri altında tespit çöker | kesinlik: çeviri yok **%80** → çeviri **%26.7** → çeviri+paraphrase **%16.7** | DOI 10.33806/ijaes1026 |
+
+> **Kararlar:** (1) TTR/hapax **Türkçede** skorlanmaz — `LEXICAL_RICHNESS_TURKISH`
+> tablosu raporla birlikte gelir. (2) Uzunluk karıştırıcısı Türkçede daha
+> keskindir, `LengthConfound.note` bunu söyler. (3) Token/kelime oranı **ters**
+> çalıştığı için kullanılmaz. (4) Rapor, intihal yüzdesinin verilen kaynak
+> kümesine bağlı olduğunu ve çeviri/eylul alıntılarının kaçırıldığını söyler.
+
+### 1.16 Türkçe normatif çerçeve ve ölçülmüş AI dağılımı
+
+**YÖK, *Yükseköğretim Kurumları Bilimsel Araştırma ve Yayın Faaliyetlerinde
+Üretken Yapay Zekâ Kullanımına Dair Etik Rehber*, Mayıs 2024, 20 sayfa.**
+Tam metin okundu. Üçü tez için önemli:
+
+1. **Hiçbir sayısal eşik yok.** *benzerlik* ve *oran* kelimeleri **0 kez**,
+   *yüzde* bir kez (eşik dışı bağlamda) geçiyor.
+2. **Tezden hiç söz etmiyor.** Dört tesadüfi geçiş, hepsi genel. Rehber
+   araştırma ve yayın faaliyetleri içindir; tez teslimine bağlayan bir hüküm
+   değildir.
+3. **İzinli/yasak ayrımı açık.** İzinli: hipotez, yöntem, örneklem büyüklüğü,
+   güç analizi, veri analizi, veri toplama/saklama/paylaşma, **kaynak araştırması,
+   kaynak düzenleme, dil bilgisi denetimi ve çeviri**. Yasak: **hipotez üretimi,
+   tartışma, yorum ve uygulama** — "üst düzey beceri, deneyim ve uzmanlık
+   gerektiren aşamalar". Koşul: araştırmacı çıktıyı gözden geçirip hataları
+   düzeltmeli, tüm hukuki ve etik sorumluluğu üstlenmeli.
+
+**Türkiye'de fiilen kullanılan benzerlik değerleri** (Altıntop 2026, Toprak 2017
+ve Güçlüer vd. 2024'ten aktardığı; **bağlayıcı ulusal eşik değildir**):
+genel beklenti **%15**, Türkiye'de "çoğunlukla" kabul edilen **%20**, tek
+kaynaktan **≥%5** sorun sayılıyor.
+
+**Ölçülmüş Türkçe AI oranı dağılımı** — Akkaya & Beygirci 2026,
+DOI **10.46452/baksoder.1899625**: DergiPark'taki 68 üniversite dergisinden
+**204** Türkçe makale, 2025, tamamı elle doğrulandı.
+
+| AI oranı bandı | makale | pay | bant ort. |
+|---|---:|---:|---:|
+| 0–20% | **122** | **%59.8** | **%6** |
+| 21–40% | 45 | %22.1 | %28 |
+| 41–60% | 25 | %12.3 | %50 |
+| 61–80% | 11 | %5.4 | %69 |
+| 81–100% | 1 | %0.5 | %94 |
+| **toplam** | **204** | | **ort. %20** |
+
+Kontrol grupları: 20 AI-üretimi belge **%100** işaretlendi ("genellikle %40-60");
+2010–2020 Türkçe makaleleri **%0–10**. TR Dizin (n=102) ort. **%12**, TR Dizin
+dışı (n=102) ort. **%28**.
+
+**Bölümlere göre:** giriş + literatür **100/204 (%49.0)**, bulguların yorumu 94
+(%46.1), özet 78 (%38.2), sonuç 77 (%37.7), **yöntem 6 (%2.9)**.
+
+> **Karar:** `TurkishAiPresence` raporla birlikte gelir. Türkçe verinin **%59.8'i
+> %20'nin altında** ve o bandın ortalaması yalnız **%6** — bu araç %20'yi
+> raporlama tabanı olarak kullanıyor, Türkçe veriden **bağımsız olarak** aynı
+> eşik çıkıyor. İkinci okuma: AI tezde **girişe** yoğunlaşıyor, yönteme değil.
+> Yöntemi temiz olan tezin girişi sorunluysa bu olağandır, şüpheli değil.
+
+### 1.17 Ölçülebilir doğrulama: `scripts/measure_ratio.py`
 
 Bu aracın kendi çiftleriyle yapılan ölçüm (dil başına 3 AI-benzeri + 3 insan
 paragraf, `scripts/calibrate.py` örnekleri):
@@ -424,10 +567,12 @@ rakip yok** diyoruz. Yayımlanmış çubuk 0.16'nın altındadır; bunu iddia de
 | Kurum | Kural | Kaynak |
 |---|---|---|
 | YÖK (ulusal) | **Oran belirlemiyor.** Tez için intihal yazılımı raporu alınıp danışman + jüriye gönderilir | Lisansüstü Eğitim ve Öğretim Yönetmeliği md. 9/2, 21/2 (RG 20.04.2016/29690) |
+| YÖK (ÜYZ etiği) | **Hiçbir sayısal eşik yok**, "tez" kelimesi geçmiyor; izinli/yasak kullanım listesi var | Etik Rehber, Mayıs 2024, 20 s. (§1.16) |
 | YTÜ (Temiz Enerji / SBE / FBE) | Alıntılar hariç ≤%15 · alıntılar dahil ≤%20 · tek kaynak ≤%2 | tet.yildiz.edu.tr |
 | Başkent Üniv. Enstitüler | ≤%20 · tek kaynak ≤%2 | baskent.edu.tr |
 | İstanbul Üniv. Sağlık Bilimleri | ≤%20 (kaynakça hariç, alıntılar dahil, 5 kelimeden küçük eşleşme hariç) | İÜ SB rapor kılavuzu |
 | ESÜ LEE | ≤%30 toplam, tek kaynak ≤%15 | lee.eskisehir.edu.tr |
+| Fiilen uygulanan TR normu (bağlayıcı değil) | genel **%15** · "çoğunlukla" kabul edilen **%20** · tek kaynak **≥%5** sorun | Altıntop 2026, Toprak 2017 ve Güçlüer vd. 2024'ten |
 | Çukurova BADI / Akdeniz SBE | >%30 yazılı açıklama ister; "≤%30 hukuken intihal yok demek değildir" | BADI / Akdeniz SBE |
 | YÖK Üretken YZ Etik Rehberi | **Yüzde yok.** Kullanılan bölümde açıklama zorunlu; hipotez/ tartışma/ yorum aşamalarında kullanım yasak | YÖK, Mayıs 2024 |
 | TÜBİTAK UYZ Rehberi | Niteliksel beyan eşiği ("önemli ölçüde kullanım"), yüzde yok | TÜBİTAK, Ocak 2026 |
@@ -478,8 +623,11 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 
 ## 5. Doğrulanamayanlar (iddia edilmiyor)
 
-* Türkçe için herhangi bir dedektörün yayımlanmış AUROC/FPR değeri.
-* Disipline göre Türkçe tez benzerlik oranları.
+* ~~Türkçe için herhangi bir dedektörün yayımlanmış AUROC/FPR değeri.~~
+  **ÇÜRÜTÜLDÜ** — bkz. §1.14. Doğru ifade: sayılar var, ama teze en yakın
+  kayıtlarda en düşük.
+* Disipline göre Türkçe **tez** benzerlik oranları (TÜBİTAK Tez Merkezi,
+  YÖK Teftiş Kurulu kararları dahil — hepsi doğrulanamadı, §1.16).
 * Türkçe tez/sözlü/ödev için tipik **kelime** sayısı (yalnız sayfa aralıkları var).
 * EXPEDITED, Unigram ve kriptografik watermark'lar için 2025–26 sayıları.
 * SemEval/PAN'da gömme ile n-gram'ın **çapraz dil** paraphrase'taki kazancı.
@@ -527,7 +675,7 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 | TR perplexity kalibrasyonu | insan medyan log10 ≈ 1.55, AI-benzeri ≈ 1.38 | `scripts/calibrate.py` |
 | EN perplexity kalibrasyonu | insan ≈ 1.69, AI-benzeri ≈ 1.39 | aynı |
 | Kod AST testleri | 12 | `tests/test_code_ast.py` |
-| Toplam test | 249, model indirmeden ~5 sn | `make test` |
+| Toplam test | 268, model indirmeden ~5 sn | `make test` |
 | MCP uçtan uca | 11 araç gerçek stdio istemcisiyle | `make mcp-test` |
 | Raporlama tabanı ölçümü (yalnız stilometri, modeller kapalı) | gerçekçi TR giriş metni AI payı **%0.0**; jenerik metin **%57.7** | `tests/test_mcp.py` |
 | Kalibrasyon koruması, gerçek korpusta | 9 örnek (6 insan + 3 AI cümle) → **ölçülmedi**, "olasılık olarak okunamaz" | `checker calibrate --human-dir … --machine-dir …` |

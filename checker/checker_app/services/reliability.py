@@ -208,8 +208,14 @@ def reliability_report(pairs: Sequence[tuple[float, float]], *, bins: int = 10) 
         "Bu ölçüm yalnız etiketli bir korpus üzerinde anlamlıdır; elinizdeki tez için "
         "doğru cevap bilinmediği için burada hesaplanamaz.",
         "Kalibre edilmiş bir olasılık bile suistimal kanıtı değildir. " + CALIBRATION_EVIDENCE,
-        "Türkiye için yayımlanmış bir dedektör AUROC/FPR değeri yoktur; bu yüzden "
-        "TR işletim noktası yalnız bu aracın kendi ölçümüdür.",
+        "Yayımlanmış Türkçe dedektör AUROC/FPR değerleri **vardır** (AUROC %99.31, "
+        "özgüllük %94.16 → FPR %5.84; DOI 10.28948/ngumuh.1930411) ama haber, özet "
+        "ve ödev kayıtlarında ölçülmüştür; teze en yakın iki alanda en düşük "
+        "sonuçlar oradadır (akademik %95.21, mevzuat-hukuk %94.99). Dahası, aynı "
+        "metni %100 insan Türkçe akademik yazıyla deneyen sekiz dedektörün "
+        "Justdone'ı %89 AI dediği ölçülmüştür (DOI 10.56493/nkusbmyo.1866431). "
+        "Bu yüzden TR işletim noktası başka bir çalışmadan alınmaz; kendi "
+        "korporunuzda `checker calibrate` ile ölçülür.",
     ]
     if len(pairs) < MIN_SAMPLES:
         return ReliabilityReport(

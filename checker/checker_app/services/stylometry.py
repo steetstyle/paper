@@ -123,6 +123,56 @@ LEXICAL_RICHNESS_SOURCE = (
     "AUC degeri 0.97 (1.8M makine uretimi; arXiv:2603.18482)."
 )
 
+#: The Turkish measurement, and it inverts the naive reading. Renklier &
+#: Sarıtaş (2026, DOI 10.28948/ngumuh.1930411) measured mean TTR over 3,000 human
+#: and 9,000 LLM Turkish texts:
+#:
+#: ===================  =======
+#: source               mean TTR
+#: ===================  =======
+#: human                **0.756**
+#: GPT-4o              0.753
+#: Gemini 2.5 Flash    0.780
+#: DeepSeek V3          0.808
+#: Claude Sonnet 4.6    0.808
+#: GPT-3.5-turbo        0.738
+#: Llama 3.3 70B        **0.709**
+#: ===================  =======
+#:
+#: The human value sits *inside* the AI range [0.709, 0.808] - Claude and
+#: DeepSeek are **more** lexically diverse than Turkish humans. So TTR cannot
+#: separate the classes in Turkish at all, which is why this tool reports the
+#: trio as context and never scores it.
+LEXICAL_RICHNESS_TURKISH: dict[str, float] = {
+    "human": 0.756,
+    "gpt-4o": 0.753,
+    "gemini-2.5-flash": 0.780,
+    "deepseek-v3": 0.808,
+    "claude-sonnet-4.6": 0.808,
+    "gpt-3.5-turbo": 0.738,
+    "llama-3.3-70b": 0.709,
+}
+
+LEXICAL_RICHNESS_TURKISH_NOTE = (
+    "Türkçede TTR sınıfları ayırmaz: insan 0.756, LLM aralığı 0.709-0.808 — insan "
+    "değeri aralığın İÇİNDE, Claude ve DeepSeek insanlardan daha zengin. Bu yüzden "
+    "Türkçede leksikal zenginlik AI işareti olarak kullanılamaz (DOI "
+    "10.28948/ngumuh.1930411)."
+)
+
+#: Turkish human text is also measurably **longer** than Turkish LLM text, which
+#: makes length a sharper confound here than the general English measurement
+#: suggests. And human Turkish shows the *highest* subword fragmentation of the
+#: set (1.522 tokens/word, above every LLM), so tokens-per-word is not a usable
+#: AI signal either - it points the opposite way from the naive expectation.
+LENGTH_TURKISH_HUMAN_WORDS = 234.7
+LENGTH_TURKISH_LLM_WORDS = (141.2, 184.8)
+LENGTH_TURKISH: dict[str, object] = {
+    "human_words": LENGTH_TURKISH_HUMAN_WORDS,
+    "llm_words": list(LENGTH_TURKISH_LLM_WORDS),
+    "human_tokens_per_word": 1.522,
+}
+
 
 def _is_numeric(text: str) -> bool:
     return bool(text) and all(ch.isdigit() or ch in ".," for ch in text)
@@ -195,8 +245,10 @@ class LexicalRichness:
             "reading": (
                 "Leksikal zenginlik AI işareti olarak tek yönlü kullanılamaz: hafif "
                 "AI düzenlemesi insan değerinin ÜSTÜNE çıkarır, üretim altına indirir "
-                "(arXiv:2410.14259). Bu yüzden puan değil, bağlam olarak raporlanır."
+                "(arXiv:2410.14259). Bu yüzden puan değil, bağlam olarak raporlanır. "
+                + LEXICAL_RICHNESS_TURKISH_NOTE
             ),
+            "turkish_reference": LEXICAL_RICHNESS_TURKISH,
         }
 
     def closest_role(self) -> tuple[float, str]:
@@ -252,6 +304,17 @@ class LengthConfound:
                 "longer_in_pairs": "72/90",
             },
             "source": "arXiv:2609.26687 (Kumar vd., HICSS 2027)",
+            "turkish_measured": {
+                "human_words": LENGTH_TURKISH["human_words"],
+                "llm_words_range": LENGTH_TURKISH["llm_words"],
+                "source": "DOI 10.28948/ngumuh.1930411",
+                "excluded": (
+                    "İnsan Türkçe metinde alt-kelime parçalanması en YÜKSEK değeri "
+                    f"gösterir ({LENGTH_TURKISH['human_tokens_per_word']} token/kelime), "
+                    "her LLM'nin üzerinde. Token/kelime oranı da AI sinyali "
+                    "olarak kullanılamaz."
+                ),
+            },
             "excluded": (
                 "Cümle uzunluğu değişkenliği tek başına şansa yakın; ortalama cümle "
                 "uzunluğu koşullar arasında fark göstermedi (27.2 / 27.3, p=.97). "
@@ -363,7 +426,16 @@ class StylometryService:
                 "(arXiv:2402.10586: 1/3/5 üretilmiş paragrafta F1 0.43 → 0.71)."
             )
         return LengthConfound(
-            word_count=word_count, sentence_count=sentence_count, regime=regime, note=note
+            word_count=word_count,
+            sentence_count=sentence_count,
+            regime=regime,
+            note=note
+            + (
+                f" Türkçede etki daha keskin: insan metni ortalama "
+                f"{LENGTH_TURKISH_HUMAN_WORDS} kelime, LLM metni "
+                f"{LENGTH_TURKISH_LLM_WORDS[0]}-{LENGTH_TURKISH_LLM_WORDS[1]} kelime, "
+                "yani %21-40 daha kısa (DOI 10.28948/ngumuh.1930411)."
+            ),
         )
 
     def analyze(self, sentence: Sentence, tokens: Sequence[Token]) -> StyleStats:

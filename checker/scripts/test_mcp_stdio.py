@@ -237,6 +237,24 @@ async def main() -> int:
         if not context.get("discourse", {}).get("measured_direction"):
             failures.append("söylem yönü ölçümü taşınmıyor")
 
+        # The measured Turkish false-positive rates are the core evidence for
+        # this tool's design, so a lost caveat is a failed run.
+        turkish = verdict.get("caveats", {}).get("turkish_fpr", "")
+        print(
+            f"TR FPR kanıtı: %89={'%89' in turkish} "
+            f"dil_salınımı={'%73.25' in turkish} "
+            f"yayımlanmış_FPR={'%5.84' in turkish} "
+            f"akademik={'%95.21' in turkish}"
+        )
+        for needle, label in (
+            ("%89 AI", "Justdone'ın %89'u"),
+            ("%73.25", "diller arası salınım"),
+            ("%5.84", "yayımlanmış Türkçe FPR"),
+            ("%95.21", "akademik alan sonucu"),
+        ):
+            if needle not in turkish:
+                failures.append(f"TR FPR kanıtı eksik: {label}")
+
     print()
     if failures:
         print("BAŞARISIZ:")

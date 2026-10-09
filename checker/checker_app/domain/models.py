@@ -444,6 +444,10 @@ class DocumentReport:
     sentence-level output is the part people screenshot."""
     human_baseline: str = ""
     """What lecturers achieve at this task, so the number has a comparison."""
+
+    turkish_fpr: str = ""
+    """Measured Turkish false-positive rates. This is the tool's core case, so
+    it travels in the report file a committee reads, not only in the README."""
     operating_point: dict[str, Any] = field(default_factory=dict)
 
     def sentence(self, index: int) -> SentenceReport:
@@ -470,6 +474,7 @@ class DocumentReport:
             "disclaimer": self.disclaimer,
             "degree_caveat": self.degree_caveat,
             "human_baseline": self.human_baseline,
+            "turkish_fpr": self.turkish_fpr,
             "document": {
                 "path": self.path,
                 "language": self.language,

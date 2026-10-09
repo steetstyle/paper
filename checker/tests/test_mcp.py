@@ -123,6 +123,69 @@ def test_disclaimer_resource_is_served() -> None:
     assert "RAID" in text
 
 
+def test_disclaimer_carries_the_turkish_detector_failure() -> None:
+    """The measured Turkish false-positive rates, which is this tool's core case."""
+    async def _read() -> str:
+        contents = await mcp_server.server.read_resource("checker://disclaimer")
+        return "".join(getattr(item, "content", "") or "" for item in contents)
+
+    text = anyio.run(_read)
+    assert "%89 AI" in text, "Altıntop'ın Justdone sonucu eksik"
+    assert "%73.25" in text, "diller arası salınım eksik"
+    assert "%5.84" in text, "yayımlanmış Türkçe FPR eksik"
+    assert "%95.21" in text, "akademik alan sonucu eksik"
+    assert "10.56493/nkusbmyo.1866431" in text
+
+
+def test_the_scan_caveats_include_the_turkish_fpr(thesis) -> None:
+    payload = call(
+        "checker_scan",
+        path=thesis,
+        use_ratio=False,
+        use_perplexity=False,
+        use_classifier=False,
+        min_level="none",
+        top=1,
+    )
+    caveats = payload["verdict"]["caveats"]
+    assert "%89 AI" in caveats["turkish_fpr"]
+    assert caveats["turkish_fpr_source"].startswith("Altıntop (2026)")
+    # Distinct from the German-lecture study: merging them would produce a
+    # number that means nothing.
+    assert "%57" in caveats["human_baseline"]
+    assert "%57" not in caveats["turkish_fpr"]
+
+
+def test_compliance_reports_the_yok_guide_text(tmp_path) -> None:
+    """A rule row that says "disclose AI use" without saying which uses are
+    forbidden is not actionable."""
+    path = tmp_path / "tez.md"
+    path.write_text(
+        "# Giriş\n\nVeri temizliği gerçekleştirilmiştir.\n",
+        encoding="utf-8",
+    )
+    payload = call("checker_compliance", path=str(path))
+    guide = payload["compliance"]["yok_guide"]
+    assert guide["numeric_threshold"] is None
+    assert guide["mentions_thesis"] is False
+    assert "hipotez üretimi" in guide["forbidden"]
+    assert "çeviri" in guide["permitted"]
+    item = next(i for i in payload["compliance"]["items"] if i["code"] == "ai_disclosure")
+    assert "YASAK" in item["detail"]
+
+
+def test_similarity_carries_the_turkish_ai_presence_distribution(thesis, source) -> None:
+    """A Turkish reference for the AI share, the way similarity has one."""
+    payload = call("checker_similarity", path=thesis, refs=[source])
+    presence = payload["similarity"]["turkish_ai_presence"]
+    assert presence["sample_size"] == 204
+    assert presence["mean_percent"] == 20.0
+    assert presence["below_20_percent_share"] == pytest.approx(0.598)
+    # AI concentrates in the opening; the method section is nearly clean.
+    assert presence["section_rates"]["method"] == pytest.approx(0.029)
+    assert "tez değil" in presence["caveat"]
+
+
 def test_disclaimer_carries_the_measured_guards() -> None:
     """The two rules that keep a reader from over-reading the output."""
     async def _read() -> str:

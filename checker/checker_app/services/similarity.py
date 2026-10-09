@@ -25,7 +25,7 @@ overlap is unremarkable for a Turkish thesis and alarming for an English one.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 from checker_app.domain.enums import CitationStatus
@@ -40,6 +40,7 @@ __all__ = [
     "SimilarityStats",
     "SimilarityReport",
     "TurkishBaseline",
+    "TurkishAiPresence",
     "build_similarity_report",
 ]
 
@@ -129,6 +130,99 @@ class TurkishBaseline:
 
 
 @dataclass(frozen=True, slots=True)
+class TurkishAiPresence:
+    """What Turkish academic writing actually looks like, measured.
+
+    This is the only published distribution for Turkish academic prose that the
+    research turned up, and it is about AI presence rather than similarity -
+    so it is the right companion to :class:`TurkishBaseline`, which measures
+    overlap. Akkaya & Beygirci (2026, DOI 10.46452/baksoder.1899625) hand-verified
+    **204 Turkish articles** from 68 university journals on DergiPark, published
+    2025:
+
+    ==================  =========  ==========
+    AI-rate band         articles   band mean
+    ==================  =========  ==========
+    0-20%                    122  (59.8%)   6%
+    21-40%                    45  (22.1%)  28%
+    41-60%                    25  (12.3%)  50%
+    61-80%                    11   (5.4%)  69%
+    81-100%                    1   (0.5%)  94%
+    **total**                204          mean **20%**
+    ==================  =========  ==========
+
+    Control groups from the same study: 20 AI-generated documents were **100%**
+    flagged at "generally 40-60%", and 2010-2020 Turkish articles came out
+    **0-10%**. Indexed in TR Dizin (n=102) the mean was **12%**, against **28%**
+    for non-TR Dizin (n=102); articles above 40% were 9/102 (8.8%) against
+    28/102 (27.5%).
+
+    Two readings matter for a thesis:
+
+    * **59.8% of Turkish academic articles sit below a 20% AI rate**, with a band
+      mean of 6% - which is the same 20% this tool uses as its reporting floor,
+      arrived at from the opposite direction.
+    * **AI concentrates in the opening, not the method.** By section: introduction
+      and literature review 100/204 (**49.0%**), interpretation of findings 94
+      (46.1%), abstract 78 (38.2%), conclusion 77 (37.7%), **method 6 (2.9%)**.
+      A thesis whose method section is fine and whose literature review is not
+      is the ordinary case, not the suspicious one.
+
+    Caveat carried with it: articles, not theses, and a hand-verified sample of
+    one journal platform.
+    """
+
+    mean_percent: float = 20.0
+    below_20_percent: int = 122
+    below_20_share: float = 0.598
+    below_20_band_mean_percent: float = 6.0
+    tr_dizin_mean_percent: float = 12.0
+    non_tr_dizin_mean_percent: float = 28.0
+    sample_size: int = 204
+    section_rates: Mapping[str, float] = field(
+        default_factory=lambda: {
+            "introduction_literature": 0.490,
+            "interpretation_of_findings": 0.461,
+            "abstract": 0.382,
+            "conclusion": 0.377,
+            "method": 0.029,
+        }
+    )
+    source: str = (
+        "Akkaya & Beygirci (2026), MAKALELERDE YAPAY ZEKÂ VARLIĞININ "
+        "DEĞERLENDİRİLMESİ, DOI 10.46452/baksoder.1899625"
+    )
+    caveat: str = (
+        "Makale, tez değil; DergiPark'taki 68 üniversite dergisinden elle "
+        "doğrulanmış 204 örnek. Tezler için ölçülmüş bir AI oranı dağılımı yok."
+    )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mean_percent": self.mean_percent,
+            "below_20_percent_count": self.below_20_percent,
+            "below_20_percent_share": self.below_20_share,
+            "below_20_percent_band_mean": self.below_20_band_mean_percent,
+            "tr_dizin_mean_percent": self.tr_dizin_mean_percent,
+            "non_tr_dizin_mean_percent": self.non_tr_dizin_mean_percent,
+            "sample_size": self.sample_size,
+            "section_rates": dict(self.section_rates),
+            "source": self.source,
+            "caveat": self.caveat,
+            "reading": (
+                f"Türkçe akademik yazıda ortalama AI oranı %{self.mean_percent}; "
+                f"{self.below_20_percent}/{self.sample_size} (%{self.below_20_share * 100:.1f}) "
+                f"makale %20'nin altında ve o bandın ortalaması yalnız "
+                f"%{self.below_20_band_mean_percent}. Bu araç %20'yi raporlama "
+                "tabanı olarak kullanıyor; Türkçe veriden bağımsız olarak aynı "
+                "eşik çıkıyor. AI giriş ve literatür taramasında yoğunlaşıyor "
+                f"(%{self.section_rates['introduction_literature'] * 100:.1f}), "
+                f"yöntemde neredeyse hiç yok (%{self.section_rates['method'] * 100:.1f})."
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SourceShare:
     """How much of the document one reference accounts for."""
 
@@ -178,6 +272,9 @@ class SimilarityReport:
     attribution: dict[str, int] = field(default_factory=dict)
     bands: tuple[dict[str, object], ...] = ()
     baseline: TurkishBaseline = field(default_factory=TurkishBaseline)
+    ai_presence: TurkishAiPresence = field(default_factory=TurkishAiPresence)
+    """What AI presence in Turkish academic writing actually looks like, so the
+    AI share has a Turkish reference the way the similarity percentage does."""
     filters: str = "kaynakça hariç · alıntılar dahil · 5 kelimeden az eşleşmeler hariç"
     filters_applied: dict[str, object] = field(default_factory=dict)
 
@@ -241,6 +338,7 @@ class SimilarityReport:
                 "caveat": self.baseline.caveat,
                 "note": self.baseline.percentile_note(self.similarity_incl_quotes),
             },
+            "turkish_ai_presence": self.ai_presence.to_dict(),
         }
 
 

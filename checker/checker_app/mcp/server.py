@@ -42,7 +42,12 @@ from checker_app.services.compliance import build_compliance_report
 from checker_app.services.discourse import RELATION_DIRECTION
 from checker_app.services.patchwork import CHANCE_BASELINES
 from checker_app.services.runner import ScanRequest, ScanRunner
-from checker_app.services.scoring import AI_DEGREE_CAVEAT, AI_HUMAN_BASELINE
+from checker_app.services.scoring import (
+    AI_DEGREE_CAVEAT,
+    AI_HUMAN_BASELINE,
+    AI_TURKISH_FPR,
+    AI_TURKISH_FPR_SOURCE,
+)
 from checker_app.services.sources import SourceLoader
 
 logger = get_logger(__name__)
@@ -89,9 +94,34 @@ Rules worth knowing before you trust a number:
   - YOK sets no similarity percentage; each institute board does. The common
     Turkish filters are "bibliography excluded, quotations included, matches under
     5 words excluded".
-  - Turkish has no published detector AUROC/FPR at all, and the bundled
-    classifier is English-only, so it is dropped automatically on Turkish with a
-    reason in `degraded_signals`.
+  - Turkish detectors fail on Turkish academic prose, measured. Altıntop (2026,
+    DOI 10.56493/nkusbmyo.1866431) ran eight detectors on a 5,715-word Turkish
+    academic text written with no AI at all: Justdone called it 89% AI, ZeroGPT
+    ~80%, TruthScan 40%. The same paper's cross-language check is why this tool
+    ships its own operating point: on the identical passage of Derrida's *Plato's
+    Pharmacy*, ZeroGPT read **0% AI** on the French original and **73.25% AI** on
+    the Turkish translation. Published Turkish AUROC/FPR figures do exist (AUROC
+    99.31%, FPR 5.84%, DOI 10.28948/ngumuh.1930411) but on news/abstract/homework
+    registers, where the two closest to a thesis score lowest - academic
+    95.21%, official/legal 94.99%.
+  - The bundled classifier is English-only, so it is dropped automatically on
+    Turkish with a reason in `degraded_signals`.
+  - Reuse detection collapses under translation: measured precision is **80%** on
+    untranslated text, **26.7%** on translated text and **16.7%** on
+    translated-then-paraphrased text (DOI 10.33806/ijaes1026). A Turkish thesis
+    citing English or German literature sits in the worst of those rows, so a
+    low similarity percentage is partly a statement about the corpus you
+    supplied, not about the thesis.
+  - **Turkish detectors fail on Turkish academic prose, measured.** Altıntop
+    (2026, DOI 10.56493/nkusbmyo.1866431) ran eight detectors on a 5,715-word
+    Turkish academic text written with no AI at all: Justdone called it 89% AI,
+    ZeroGPT ~80%, TruthScan 40%. The same paper's cross-language check is the
+    reason this tool ships its own operating point: on the identical passage of
+    Derrida's *Plato's Pharmacy*, ZeroGPT read **0% AI** on the French original
+    and **73.25% AI** on the Turkish translation. Published Turkish AUROC/FPR
+    figures do exist (AUROC 99.31%, FPR 5.84%, DOI 10.28948/ngumuh.1930411) but
+    on news/abstract/homework registers, where the two closest to a thesis score
+    lowest - academic 95.21%, official/legal 94.99%.
 """
 
 #: Tool annotations, mirroring the paper-app conventions.
@@ -285,6 +315,8 @@ def _verdict(report) -> dict[str, Any]:  # noqa: ANN001
         "caveats": {
             "degree": report.degree_caveat,
             "human_baseline": report.human_baseline,
+            "turkish_fpr": AI_TURKISH_FPR,
+            "turkish_fpr_source": AI_TURKISH_FPR_SOURCE,
         },
     }
 
@@ -1049,6 +1081,7 @@ async def _disclaimer_resource() -> str:
         f"{DISCLAIMER}\n\n"
         f"{AI_DEGREE_CAVEAT}\n\n"
         f"{AI_HUMAN_BASELINE}\n\n"
+        f"{AI_TURKISH_FPR}\n\n"
         "Kurumsal arka plan: RAID (arXiv:2405.07940) ekibi dedektörlerin cezai "
         "bağlamda kullanımına itiraz ediyor; IEEE S&P 2026 ticari dedektörlerin "
         "akademik kararlarda kullanım için uygun olmadığını ve FPR aralığının "

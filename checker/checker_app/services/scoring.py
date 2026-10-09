@@ -91,6 +91,50 @@ AI_DEGREE_CAVEAT = (
 #: (Fiedler & Döpke, Int. Review of Economics Education 49:100321, 2025,
 #: 10.1016/j.iree.2025.100321). Sentence localization with a Binoculars-family
 #: score is F1@K **0.608** on TriBERT (2025.findings-ijcnlp.48).
+#:
+#: The Turkish measurement is the sharper warning, because it is on Turkish
+#: academic prose - exactly this tool's input. Altıntop (2026,
+#: DOI 10.56493/nkusbmyo.1866431) ran eight detectors on a 5,715-word Turkish
+#: academic text written **without any AI at any stage**:
+#:
+#: ============================  ==========================================
+#: detector                      verdict on 100% human Turkish prose
+#: ============================  ==========================================
+#: Justdone                       **89% AI**
+#: ZeroGPT                        ~80% AI** (75.29% "probably" + 21.14% "part")
+#: Sidekicker                     "signs of AI generation" (high)
+#: MyDetector                     "probably 40% AI generation"
+#: TruthScan                      40% AI
+#: QuillBot AI / Smodin / Copyleaks  0% AI
+#: ============================  ==========================================
+#:
+#: The same paper's cross-language check is the reason a Turkish tool cannot be
+#: calibrated from English performance: on the *identical* passage of Derrida's
+#: *Plato's Pharmacy*, ZeroGPT reads **0% AI** on the 1972 French original and
+#: **73.25% AI** on the 2012 Turkish translation - a 73-point swing caused by
+#: language alone. The same text scores 9% (Turnitin, quotations-only filter) and
+#: 4% (quotes and references excluded) with the plagiarism engines, which the
+#: authors note is "in the upper segment of globally acceptable".
+#:
+#: For balance, published Turkish *detector* numbers do exist, on other
+#: registers: AUC-ROC **99.31%** with specificity 94.16%, i.e. **FPR 5.84%**, on
+#: 2,398 held-out Turkish items (Renklier & Sarıtaş 2026,
+#: DOI 10.28948/ngumuh.1930411). Those are news/abstract/homework registers, and
+#: the two closest to a thesis score lowest there - **academic 95.21%** and
+#: **official/legal 94.99%**. They do not transfer, which is why this tool ships
+#: its own measured operating point instead of borrowing one.
+AI_TURKISH_FPR = (
+    "Türkçe'de dedektör yanlış pozitif oranı ölçülmüştür ve yüksektir: Altıntop "
+    "(2026, DOI 10.56493/nkusbmyo.1866431) 8 aracı, %100 insan Türkçe akademik metin "
+    "üzerinde denemiş; Justdone %89 AI, ZeroGPT ~%80 AI, TruthScan %40 AI demiştir. "
+    "Aynı çalışma dil etkisini ölçüyor: Derrida'nın aynı sayfası ZeroGPT'de Fransızca "
+    "orijinalde %0 AI, Türkçe çevirisinde %73.25 AI. Aynı metin intihal motorlarında "
+    "%9 (yalnız alıntı filtresi) ve %4 (alıntı + kaynakça hariç) çıktı. Yayımlanmış "
+    "Türkçe dedektör AUROC/FPR değerleri de vardır (AUROC %99.31, özgüllük %94.16 → "
+    "FPR %5.84; DOI 10.28948/ngumuh.1930411) ama haber/özet/ödev kayıtlarında ve teze "
+    "en yakın iki alanda en düşük: akademik %95.21, mevzuat-hukuk %94.99."
+)
+AI_TURKISH_FPR_SOURCE = "Altıntop (2026), DOI 10.56493/nkusbmyo.1866431"
 AI_HUMAN_BASELINE = (
     "Jüri de bu işte zayıf: 63 öğretim üyesi Alman tez parçalarında %57 (AI metni) ve %64 "
     "(insan metni) doğru tanıdı, profesyonel düzeydeki AI metninde doğruluk %20'nin altında "

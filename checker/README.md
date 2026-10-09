@@ -460,7 +460,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             250 test, model indirmeden
+├── tests/             272 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```
@@ -495,8 +495,33 @@ Tasarım kararları:
 ## Sınırlar
 
 - Tek cümle kanıt değildir; bulgu, insanın gözden geçirmesi için sıralamadır.
-- **Türkçe'de hiçbir dedektörün yayımlanmış AUROC/FPR değeri yok.** Buradaki
-  sayılar bu aracın kendi küçük örneklemleriyle ölçülmüştür.
+- **Türkçe'de dedektörler ölçülmüş biçimde başarısız.** Altıntop (2026,
+  DOI 10.56493/nkusbmyo.1866431) 8 dedektörü, hiçbir aşamada AI kullanılmadan
+  yazılmış **5.715 kelimelik** Türkçe bir akademik metin üzerinde denedi:
+
+  | Dedektör | %100 insan metne verdiği karar |
+  |---|---|
+  | Justdone | **%89 AI** |
+  | ZeroGPT | ~%80 AI |
+  | Sidekicker | "yapay zekâ üretimi işaretleri" |
+  | MyDetector | "büyük olasılıkla %40 AI" |
+  | TruthScan | %40 AI |
+  | QuillBot / Smodin / Copyleaks | %0 AI |
+
+  Aynı metin intihal motorlarında %9 (yalnız alıntı filtresi) ve %4 (alıntı +
+  kaynakça hariç) çıktı — yani sorun metinde değil, dedektörde.
+
+  Daha keskin olan dil etkisi: Derrida'nın *Plato's Pharmacy*'nin **aynı**
+  sayfası ZeroGPT'de 1972 Fransızca orijinalde **%0 AI**, 2012 Türkçe
+  çevirisinde **%73.25 AI**. Bir Türkçe aracı İngilizce performanstan kalibre
+  edilemez.
+
+  Yayımlanmış Türkçe dedektör sayıları **vardır** (AUROC %99.31, özgüllük
+  %94.16 → **FPR %5.84**, DOI 10.28948/ngumuh.1930411) ama haber/özet/ödev
+  kayıtlarında ölçülmüştür ve teze en yakın iki alanda en düşük sonuçlar
+  oradadır: **akademik %95.21**, **mevzuat-hukuk %94.99**. Bu yüzden bu araç
+  başka bir çalışmadan eşik almaz; `checker calibrate` ile kendi korpusunuzda
+  ölçer.
 - Ham perplexity kendi başına kullanılmaz; rapor onu betimleyici bir istatistik
   olarak gösterir.
 - Paraphrase tamamen yeniden yazılmış metni bu araç bulmaz (shingle recall'ı

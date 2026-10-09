@@ -35,7 +35,80 @@ from checker_app.domain.enums import CitationStatus, RiskLevel
 from checker_app.domain.models import DocumentReport, SentenceReport
 from checker_app.domain.sections import SectionRole, role_label
 
-__all__ = ["ComplianceItem", "ComplianceReport", "build_compliance_report", "find_disclosure"]
+__all__ = [
+    "ComplianceItem",
+    "ComplianceReport",
+    "build_compliance_report",
+    "find_disclosure",
+    "YOK_GUIDE",
+]
+
+#: YÖK's *Yükseköğretim Kurumları Bilimsel Araştırma ve Yayın Faaliyetlerinde
+#: Üretken Yapay Zekâ Kullanımına Dair Etik Rehber* (Mayıs 2024, 20 sayfa),
+#: read in full. Three things in it matter for a thesis and are not commonly
+#: known:
+#:
+#: 1. It sets **no numeric threshold at all**. The words *benzerlik* and *oran*
+#:    appear **zero** times; *yüzde* appears once, in a non-threshold context.
+#:    So there is no national AI-authorship percentage in force.
+#: 2. It **does not mention tez/thesis** at all (four incidental hits, all
+#:    generic). It binds research and publication, not thesis submission.
+#: 3. It draws an explicit **permitted / forbidden** line, and the forbidden side
+#:    is the part that a thesis actually needs: hypothesis generation,
+#:    discussion, interpretation and application - "üst düzey beceri, deneyim ve
+#:    uzmanlık gerektiren aşamalar". The permitted side explicitly includes
+#:    literature review, source organisation, grammar/spelling check and
+#:    translation, each conditional on the researcher reviewing and correcting
+#:    the output and assuming full responsibility.
+YOK_GUIDE = {
+    "title": (
+        "Yükseköğretim Kurumları Bilimsel Araştırma ve Yayın Faaliyetlerinde "
+        "Üretken Yapay Zekâ Kullanımına Dair Etik Rehber"
+    ),
+    "date": "Mayıs 2024",
+    "pages": 20,
+    "url": (
+        "https://proje.yok.gov.tr/documentFiles/17539645334."
+        "Yükseköğretimde%20üretken%20yapay%20zeka%20kullanımı-tr.pdf"
+    ),
+    "numeric_threshold": None,
+    "mentions_thesis": False,
+    "permitted": (
+        "hipotez, yöntem, örneklem büyüklüğü belirleme/güç analizi, veri analizi, "
+        "veri toplama, veri saklama ve paylaşma, kaynak araştırması, "
+        "kaynak düzenleme, dil bilgisi/yazım denetimi ve çeviri"
+    ),
+    "forbidden": (
+        "hipotez üretimi, tartışma, yorum/interpretation ve uygulama — "
+        "'üst düzey beceri, deneyim ve uzmanlık gerektiren aşamalar'"
+    ),
+    "conditions": (
+        "araştırmacı çıktıyı gözden geçirip materyal/yanlılık/faktüel hataları "
+        "düzeltmeli ve tüm hukuki ve etik sorumluluğu üstlenmelidir"
+    ),
+    "named_risks": (
+        "kullanımın açıklanmaması; izinsiz başkası içeriği; kaynaksız ya da "
+        "hatalı alıntılama; üretken zekânın ürettiği yanıltıcı veri"
+    ),
+    "reading": (
+        "Rehber tezden söz etmiyor ve hiçbir sayısal eşik koymuyor. Bu yüzden "
+        "uyum listesi beyanı ve atıfı denetler; benzerlik yüzdesini ise kurumun "
+        "kendi kararına bırakır."
+    ),
+}
+
+#: Turkish de-facto similarity thresholds. Altıntop (2026, §2, citing Toprak 2017
+#: and Güçlüer vd. 2024) records them as practice, not as a national rule.
+TURKISH_SIMILARITY_NORM = {
+    "general_ceiling_percent": 15.0,
+    "mostly_accepted_percent": 20.0,
+    "single_source_problem_percent": 5.0,
+    "source": (
+        "Altıntop (2026, DOI 10.56493/nkusbmyo.1866431), Toprak (2017) ve "
+        "Güçlüer vd. (2024)'ten aktardığı uygulama değerleri; bağlayıcı ulusal "
+        "eşik değildir."
+    ),
+}
 
 # YÖK Etik Rehber (May 2024) requires the use to be stated in the affected
 # section; these are the phrases an author would write.
@@ -80,6 +153,10 @@ class ComplianceItem:
     where: str = ""
     action: str = ""
     source: str = ""
+    detail: str = ""
+    """The rule text itself, where the summary line would lose the operative
+    detail. A checklist row that says "disclose AI use" without saying which
+    uses are forbidden is not actionable."""
 
 
 @dataclass(slots=True)
@@ -106,9 +183,12 @@ class ComplianceReport:
                     "where": i.where,
                     "action": i.action,
                     "source": i.source,
+                    "detail": i.detail,
                 }
                 for i in self.items
             ],
+            "yok_guide": YOK_GUIDE,
+            "turkish_similarity_norm": TURKISH_SIMILARITY_NORM,
             "ai_heavy_sections": list(self.ai_heavy_sections),
             "uncited_matches": list(self.uncited_matches),
             "notes": list(self.notes),
@@ -163,6 +243,12 @@ def build_compliance_report(
                 source=(
                     "YÖK, Yükseköğretimde Üretken Yapay Zekâ Kullanımına Dair Etik "
                     "Rehber (Mayıs 2024); TÜBİTAK UYZ Rehberi (Ocak 2026)"
+                ),
+                detail=(
+                    f"Rehber (Mayıs 2024, 20 s.) izinli: {YOK_GUIDE['permitted']}. "
+                    f"YASAK: {YOK_GUIDE['forbidden']}. Koşul: "
+                    f"{YOK_GUIDE['conditions']}. Sayısal eşik YOK, tezden hiç söz "
+                    "etmiyor."
                 ),
             )
         )
