@@ -519,6 +519,80 @@ kuralı, `1I` yerine `1 I` görmek için birleştirilmiş formu kullanır.
 
 Türkçe harfler de kapsama alındı: `K A Y N A K Ç A` de aynı artefakttır.
 
+### Yedinci tur: gerçek bir Türkçe tez — ve Türkçe harflerin yokluğu
+
+`~/research/bert-101/main.pdf` — Marmara Üniversitesi, ModernBERT üzerine
+yüksek lisans tezi. 80 sayfa, `report` sınıfı, 7 bölüm, 63 kaynak. Aracın
+**asıl hedefi** bu. Ve ilk cümlede şu çıktı:
+
+```
+T.C. MARMARA ¨UN˙IVERS˙ITES˙I M ¨UHEND˙ISL˙IK FAK¨ULTES˙I
+```
+
+Bu bir biçim kusuru değil. Belgede **6.672 adet** *ayrık* diyakritik vardı ve
+didakritik taşıyan altı Türkçe harfin **beşi sıfır kez** geçiyordu:
+
+| harf | önce | sonra |
+|---|---:|---:|
+| `Ğ` / `ğ` | 0 / 0 | 6 / **1.190** |
+| `İ` | **0** | 118 |
+| `Ş` / `ş` | 0 / 0 | 21 / **1.275** |
+| `ç` | 32 | **1.130** |
+| `ö` | 36 | **1.058** |
+| `ü` | 38 | **1.689** |
+
+Yani Türkçe sözlük kuralları, leksikal zenginlik tablosu ve Türkçe benzerlik
+tabanı **Türkçe harflerin çoğu hiç bulunmadığı** bir metin üzerinde çalışıyordu.
+
+#### Neden oluyor
+
+Bazı TeX font kodlamalarında birleşik işaretin ToUnicode girdisi yok, pypdf
+yerine **ayrık** biçimini veriyor ve harften ayrı, önünde ya da arkasında.
+`¨` + `U` bileşik olarak yazılması gerekirken ` ¨U` olarak geliyor.
+
+#### Onarım yalnız Unicode'un onayladığını yapıyor
+
+Birleşik işaret ayrık hâle getirilir ve **yalnız NFC gerçekten tek kod noktası
+yazıyorsa kabul edilir**. Kendi kendini doğrulayan bir kural: `a` + cedilla
+birleşmediği için `bas ¸arımı` örneğinde işaret `a`'ya değil `s`'ye gider ve
+`başarımı` çıkar — Türkçe harf mantığı yazılmamıştır, Unicode'un işi.
+
+Bu işaretlerin **taban harfi iki kez** yazılıyor: `ÇİFT` = `C`, `¸`, `C`, `˙`,
+`I`, `F`, `T` geliyor. Her iki kopyanın da elenmesi gerekiyor, yoksa her kelimenin
+başında hayalet bir `C` kalıyor.
+
+#### Yön kararı ölçülmüş
+
+İşaretin iki yanındaki harfle de birleşebiliyor: `E` + kısa üstüncü `Ĕ`, `g` +
+kısa üstüncü `ğ` — ikisi de gerçek harf. Yanlış seçim `E˘gitim` → `Ĕgitim` ve
+`Sˇkoda` → `Sǩoda` yapıyordu. Yön tezden ölçülerek sabitlendi: bu belgede
+kısa üstüncü **harften önce** (`E˘g`) geliyor ve `ğ` 1.190 kez geçiyor.
+
+Boşluğu silip silmemek de ölçüldü — tezin kendi `.tex` kaynaklarındaki sözcük
+sayısına karşı:
+
+| | sözcük |
+|---|---:|
+| onarım yok | 26.714 |
+| boşluğu koru | 23.964 |
+| **boşluğu sil** | **20.715** |
+| kaynak `.tex` (kabaca) | ~17.590 |
+
+Silmek doğru. Bedeli gerçek: `MARMARAÜNİVERSİTESİ` gibi birkaç kelime
+birleşiyor — ama onardığı durumdan az ve çıktıda **görünür**.
+
+Bu onarım **her** PDF'e uygulanıyor; on bir arXiv tezinde ölçülen değişim
+%0.7'yi geçmiyor (aksanlı dillerde doğru birleşme), Türkçe tezde **−%25.5**.
+
+#### Tezin tam analizi (onarım sonrası)
+
+```
+80 sayfa · 20.088 sözcük · 1.299 cümle · 138 bölüm · dil tr (0.99)
+AI kapsamı %0.4 — raporlama tabanının (%20) altında, belge düzeyinde AI hükmü verilmiyor
+bağlam · 100 kelimede 0.1 açımlama, 0.3 atıf → açımlama payı %22, insan yazar lehine
+kaynakça: 63 kayıt · 12 gözden geçirilecek · beklenen gerçek bulgu: muhtemelen 0
+```
+
 ### Altıncı tur: global MCP kurulumu ve iki hata
 
 MCP sunucusu `~/.config/opencode/opencode.json` içine **`paper` ile aynı kalıpta**
@@ -926,7 +1000,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             401 test, model indirmeden
+├── tests/             412 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

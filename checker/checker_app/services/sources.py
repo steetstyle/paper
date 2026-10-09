@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
+import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -411,6 +412,150 @@ def _pdf_heading_level(
     return min(size_rank.get(round(font_size, 1), 1), PDF_HEADING_MAX_LEVEL)
 
 
+#: Spacing diacritics, mapped to the combining marks that actually compose.
+#:
+#: Some TeX font encodings have no ToUnicode entry for a combining mark, so pypdf
+#: emits the *spacing* form instead, on its own, before the letter it belongs to:
+#: "MARMARA ¨UN˙IVERS˙ITES˙I" for "MARMARA ÜNİVERSİTESİ". The result is not a
+#: cosmetic problem. Measured on a real Turkish thesis (Marmara University,
+#: ModernBERT, 160,040 characters): **6,672** such marks, and of the six Turkish
+#: letters that carry a diacritic the extractor returned **zero** occurrences of
+#: Ğ, İ, Ş, ş and ğ - it produced Ç, ç, ö, ü, Ö, Ü and nothing else. Every
+#: Turkish-specific measurement in this tool - the lexicon rules, the richness
+#: table, the Turkish baseline - was running on mangled text.
+#:
+#: U+00B7 MIDDLE DOT and U+2022 BULLET are deliberately absent: they are real
+#: symbols in this document, not broken cedillas.
+#: Spacing diacritic -> (combining mark, which side the base letter is on).
+#:
+#: The side is not cosmetic. Both sides often compose: "S" + breve and "k" +
+#: breve are both letters, so a mark arriving between two letters can attach to
+#: either, and picking wrong is how "Sˇkoda" came out as "Sǩoda" and "E˘gitim"
+#: as "Ĕgitim". The side was therefore taken from the document, not guessed:
+#:
+#: - diaeresis, breve and dot-above arrive *before* their letter ("¨UN", "E˘g",
+#:   "C˙I"), so they prefer the following one. For the breve this matters most:
+#:   it composes with A, E, G, I and U, and in a Turkish thesis ğ occurs 1,190
+#:   times against a handful of Ĕ.
+#: - cedilla arrives *after* ("bas ¸arımı", "C¸"), so it prefers the preceding
+#:   one. "a" + cedilla does not compose, so the Turkish case resolves itself.
+#: - acute, macron, circumflex, caron and tilde are rare here and follow the
+#:   letter they trail, which is the reading that leaves the common cases alone.
+#:
+#: U+00B7 MIDDLE DOT and U+2022 BULLET are deliberately absent: they are real
+#: symbols in these documents, not broken cedillas.
+_SPLIT_DIACRITIC_MAP = {
+    "¨": ("\u0308", "after"),  # diaeresis  -> Ü Ö ü ö
+    "¸": ("\u0327", "before"),  # cedilla    -> Ç ç
+    "˘": ("\u0306", "after"),  # breve      -> Ğ ğ
+    "˙": ("\u0307", "after"),  # dot above  -> İ
+    "ˆ": ("\u0302", "before"),  # circumflex -> â ê î ô û
+    "´": ("\u0301", "before"),  # acute      -> á é í ó ú
+    "¯": ("\u0304", "before"),  # macron     -> ū ī
+    "ˇ": ("\u030c", "before"),  # caron      -> č š ž
+    "˜": ("\u0303", "before"),  # tilde      -> ã õ ñ
+}
+
+
+def _compose(base: str, combining: str) -> str | None:
+    """The precomposed character, or ``None`` if the pair does not compose.
+
+    This is the whole safety rule, and it is self-validating: a composition is
+    accepted only when Unicode actually spells it as one code point. So a genuine
+    acute accent on a Spanish "e" is joined, and a mark that belongs to nothing is
+    left exactly where it was.
+    """
+    composed = unicodedata.normalize("NFC", base + combining)
+    return composed if len(composed) == 1 else None
+
+
+def repair_split_diacritics(text: str) -> str:
+    """Recompose spacing diacritics that arrived detached from their letter.
+
+    Both orders occur and they alternate: this thesis emits ``E˘gitim`` - the
+    breve *after* its letter, from "Eğitim" - and ``bas ¸arımı`` - the cedilla
+    *before* its letter, from "başarımı". So each mark is tried against the
+    character on either side, and the whitespace pypdf inserted in front of it
+    goes with it.
+
+    U+00B7 MIDDLE DOT and U+2022 BULLET are deliberately not in the map: they are
+    real symbols in this document, not broken cedillas.
+    """
+    if not any(mark in text for mark in _SPLIT_DIACRITIC_MAP):
+        return text
+
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        entry = _SPLIT_DIACRITIC_MAP.get(char)
+        if entry is None:
+            out.append(char)
+            index += 1
+            continue
+        combining, side = entry
+
+        # Which neighbour owns the mark: the one the document puts it next to,
+        # and the other is only tried if that one cannot compose.
+        attempts = ("before", "after") if side == "before" else ("after", "before")
+
+        for attempt in attempts:
+            if attempt == "before":
+                # Letter first, mark second: "bas ¸arımı" -> "başarımı".
+                position = len(out) - 1
+                while position >= 0 and out[position].isspace():
+                    position -= 1
+                base = out[position] if position >= 0 else ""
+                if not base.isalpha():
+                    continue
+                joined = _compose(base, combining)
+                if joined is None:
+                    continue
+                # The whitespace in between is an artefact of pypdf splitting one
+                # glyph across two text-showing operations, and removing it was
+                # measured against this thesis's own LaTeX sources:
+                #
+                #   keep it:  23,964 words
+                #   delete:   20,715 words   <- closer to the sources
+                #   no repair: 26,714 words
+                #
+                # The cost is real - it fuses "MARMARA" and "ÜNİVERSİTESİ" - but
+                # rarer than the case it repairs, and visible in the output.
+                del out[position + 1 :]
+                out[position] = joined
+                index += 1
+                if index < length and text[index] == base:
+                    index += 1
+                break
+
+            # Mark first, letter second: "¨UN" -> "ÜN".
+            after = text[index + 1] if index + 1 < length else ""
+            if not after.isalpha():
+                continue
+            joined = _compose(after, combining)
+            if joined is None:
+                continue
+            # These glyphs emit their base letter twice, once on each side of the
+            # mark: "ÇİFT" arrives as C, cedilla, C, dot, I, F, T. The copy in
+            # front has already been emitted, the copy behind is still ahead in
+            # the stream, and both go.
+            if out and (
+                out[-1].isspace()
+                or (out[-1].isalpha() and out[-1].lower() == after.lower())
+            ):
+                out.pop()
+            out.append(joined)
+            index += 2
+            if index < length and text[index].lower() == after.lower():
+                index += 1
+            break
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
 def _extract_pdf(path: Path) -> str:
     """Extract PDF text, restoring the heading structure the plain text loses.
 
@@ -489,7 +634,11 @@ def _extract_pdf(path: Path) -> str:
         if not runs:
             pages.append("\n\f\n")
             continue
-        pages.append("\n\f\n" + _mark_pdf_headings(runs, body_size, size_rank) + "\n")
+        pages.append(
+            "\n\f\n"
+            + repair_split_diacritics(_mark_pdf_headings(runs, body_size, size_rank))
+            + "\n"
+        )
     return "".join(pages)
 
 
