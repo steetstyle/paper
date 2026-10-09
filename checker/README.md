@@ -312,6 +312,71 @@ füzyonudur** ve o korpusta en iyi **tek** yöntem **34.49**'dur; çalışma yal
 EN→FR yönünde ve 2017 gömme modelleriyle yapılmıştır. Yani bulunan küme
 doğrulamayı gerektiren bir işarettir; **bulunamayan küme hiçbir şey kanıtlamaz.**
 
+## PDF: tezler nasıl geliyor, tez gibi geliyor
+
+Tezler Markdown olarak gelmez. Bu bölüm, arXiv'deki **gerçek** bir doktora tezi
+(1407.6566, 154 sayfa, 60.238 sözcük) üzerinde ölçülenlerdir — düzeltme
+**öncesi** ile **sonrası** karşılaştırması.
+
+Düz `extract_text()` yalnızca glifleri verir; punto bilgisi kaybolur, dolayısıyla
+başlık paragraftan **ayırt edilemez**. Ölçülen sonuç:
+
+| | önce | sonra |
+|---|---:|---:|
+| Bölüm | **1** | **84** |
+| Başlık bloğu | 0 | 83 |
+| Kaynakça denetimi | "bulunamadı" | 189 kayıt |
+| Sayfa haritası | ✓ | ✓ |
+
+**Nasıl:** pypdf'in ziyaretçi geri çağrısıyla karakter başına punto toplanır,
+gövde punto karakter ağırlıklı mod ile belirlenir (bu tezde 10.9pt / 92.226
+karakter; başlıklar 12pt ve üstü / 978 karakter), başlıklar Markdown `#`
+önekine çevrilir ve mevcut bölücü **hiç değiştirilmeden** çalışır.
+
+**Ölçülen doğruluk:** gövde üstündeki 46 parçanın **44'ü gerçek başlık**, 2'si
+artefakt (arXiv damgası, dipnot yıldızı) — **%95.7 kesinlik**, iki artefakt
+filtreyle gider.
+
+### Neden düz metinden numaraya bakmak yetmiyor
+
+İlk deneme "1.2.1 Optical observations" gibi satırları numaradan tanıdı ve
+**359 sahte başlık** üretti: içindekiler tablosu (nokta kılavuzlu), sınav jürisi
+listesi ("1. Prof. Dr. Steinmetz") ve "7.5 keV) for 345 systems..." ile başlayan
+bir cümle. Doğru kural **punto başlığın mı olduğunu belirler**, numaralandırma
+yalnız **seviyeyi**.
+
+Sarma başlıklar da çözüldü: "The XMM-Newton/SDSS" ve "Galaxy Cluster Survey" aslında
+tek başlıktı. Kural tipografiktir — **ardışık, aynı puntodaki satırlar** kaydırılmış
+tek başlıktır; **punto değişimi** yeni başlık başlatır. Üç başlık ("Chapter 1"
+20.7pt, "Introduction" 24.8pt, "1.1 Clusters" 14.3pt) aralarında boş satır olmadan
+üst üste geldiği için boş satır sezgisi yetmiyordu.
+
+### İki hata, ikisi de sessizce
+
+1. **Sayfa altbilgisi başlığı yuttu.** Altbilgi numarası, sayfa sınırı (`\f`) ve
+   başlık işareti tek satırda birleşiyordu: `126\f# References`. Başlık deseni
+   satır başına çivili olduğu için artık eşleşmiyor — ve bu **tek satır**
+   yüzünden 154 sayfalık tez "kaynakça yok" diyordu.
+2. **Gövde punto sayfa başına hesaplanıyordu.** Bir tablo sayfasında mod tablo
+   kendi fontu oluyor, sonra o sayfadaki sıradan metin başlık gibi görünüyordu:
+   400 karakterlik bir tablo-notu paragrafı bölüm haline gelmişti. Gövde punto
+   artık **belge genelinde** hesaplanıyor.
+
+### Kaynakçada ölçülen yanlış pozitifler
+
+Astronomi biçimi `Yazar. Yıl, Dergi, Cilt, Sayfa [geri referanslar]`. İki hata
+vardı ve ikisi de gerçek ölçümle bulundu:
+
+- `max(years)` **sayfa numaralarını yıl** sanıyordu: `MNRAS, 403, 2063 11` →
+  "2063 gelecek yıl". Yıl artık **konumundan** okunuyor (yazarlar ile yayın yeri
+  arasındaki, virgülle biten ilk dört haneli sayı).
+- `MIN_PLAUSIBLE_YEAR = 1950` **temel fizik referanslarını** işaretliyordu:
+  Hubble 1926, Zwicky 1933 ve 1937, Smith 1936. Dokuz "imkânsız eski yıl"
+  işaretinin **tamamı meşru** çıktı. Eşik artık ilk bilimsel dergilerin
+  başlangıcı; 1950 öncesi kabul edilir, çünkü **öyle olmak zorunda**.
+
+Sonuç: 189 gerçek kaynakta **9 review → 2**, ikisi de çıkarım artefaktı.
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -612,7 +677,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             334 test, model indirmeden
+├── tests/             369 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

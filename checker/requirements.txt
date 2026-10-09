@@ -21,6 +21,7 @@ typer==0.27.3
 rich==15.0.0
 beautifulsoup4==4.15.0          # HTML reference sources
 pypdf==6.19.0                   # PDF reference sources
+fonttools==4.60.1              # pypdf needs it to decode CFF Type1 font encodings
 
 # --- AI signals: perplexity / burstiness + AI classifier -------------------
 transformers==5.19.0

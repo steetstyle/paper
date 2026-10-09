@@ -337,7 +337,7 @@ def test_future_and_impossible_years_escalate() -> None:
             _reference_document(
                 "Doe, A. (2099). Future perspectives on tutoring. Journal of Applied "
                 "Research.\n\n"
-                "Freeman, T. (1912). Early measurement. Monographs in Education.\n",
+                "Freeman, T. (1600). Early measurement. Monographs in Education.\n",
             )
         )
         .sentences
@@ -346,6 +346,62 @@ def test_future_and_impossible_years_escalate() -> None:
     assert ("kalici_kimlik_yok", "gelecek_yil") in flags
     assert any("imkansiz_eski_yil" in f for f in flags)
     assert all(e.risk == "review" for e in audit.entries)
+
+
+def test_foundational_references_are_not_flagged_as_impossible() -> None:
+    """A 1950 floor was wrong, and measurement said so.
+
+    The floor used to be 1950, on the assumption that a thesis cites only modern
+    literature. Run against a real astrophysics thesis (arXiv:1407.6566) that
+    produced nine "impossible old year" flags on a legitimate bibliography -
+    Hubble 1926, Zwicky 1933 and 1937, Smith 1936. Flagging foundational physics
+    is not a weak signal, it is a wrong one, and it spends the reader's trust
+    that every other flag depends on. The floor is now the first scientific
+    periodicals.
+    """
+    from checker_app.services.references import MIN_PLAUSIBLE_YEAR
+
+    assert MIN_PLAUSIBLE_YEAR == 1665
+    classics = "\n\n".join(
+        [
+            "Hubble, E. P. 1926, ApJ, 64, 321.",
+            "Zwicky, F. 1933, Helvetica Physica Acta, 6, 110.",
+            "Smith, S. 1936, ApJ, 83, 23.",
+        ]
+    )
+    audit = audit_references(
+        SentenceSplitter(get_settings().segmentation)
+        .split(_reference_document(classics))
+        .sentences
+    )
+    flagged = [e for e in audit.entries if "imkansiz_eski_yil" in e.flags]
+    assert not flagged, f"temel fizik referansları işaretlenmemeli: {flagged}"
+    assert {e.year for e in audit.entries} == {1926, 1933, 1936}
+
+
+def test_the_year_is_read_from_its_position_not_from_the_largest_number() -> None:
+    """Astronomy style puts back-references after the page number.
+
+    "MNRAS, 403, 2063 11" is a page number, not a year. Taking the largest
+    year-shaped number flagged nine real entries in a 189-entry bibliography as
+    future-dated; reading the year where it actually sits - between the authors
+    and the venue - removes all of them.
+    """
+    from checker_app.services.references import audit_references as _audit
+
+    astronomy = "\n\n".join(
+        [
+            "Takey, A., Schwope, A., Lamer, G., et al. 2013, MNRAS, 440, 3063 11.",
+            "Finoguenov, A., Watson, M. G., Tanaka, M., et al. 2010, MNRAS, 403, 2063 11.",
+        ]
+    )
+    audit = _audit(
+        SentenceSplitter(get_settings().segmentation)
+        .split(_reference_document(astronomy))
+        .sentences
+    )
+    assert {e.year for e in audit.entries} == {2010, 2013}
+    assert not [e for e in audit.entries if "gelecek_yil" in e.flags]
 
 
 def test_audit_carries_its_own_evidence_and_its_own_limits() -> None:

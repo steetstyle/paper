@@ -103,9 +103,24 @@ _DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:a-z0-9<>+]+", re.I)
 _DOI_LOOSE_RE = re.compile(r"\bdoi[:\s]*", re.I)
 _URL_RE = re.compile(r"https?://\S+|\bwww\.\S+", re.I)
 _YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\b")
-#: A reference that predates the discipline's plausible start is as suspicious as
-#: one dated in the future, and both are cheap to spot offline.
-MIN_PLAUSIBLE_YEAR = 1950
+
+#: A four-digit number followed by a comma sits in the author/venue gap, which is
+#: where the publication year goes. Page numbers are followed by spaces or by
+#: further back-references, not by a comma.
+_AUTHOR_YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\s*,")
+#: The floor for "this year cannot be real".
+#:
+#: This used to be 1950, on the assumption that a thesis cites only modern
+#: literature. Measurement on a real thesis destroyed that assumption: of the nine
+#: entries it flagged as impossible-old-year, every one was legitimate - Hubble
+#: 1926, Zwicky 1933 and 1937, Smith 1936 - because physics and astronomy cite
+#: foundational work routinely. Flagging those is not a weak signal, it is a wrong
+#: one, and it is the kind that costs a reader trust in every other flag.
+#:
+#: So the flag now fires only below the first scientific periodicals (the
+#: Philosophical Transactions, 1665), where a *cited reference* really is
+#: implausible. Pre-1950 remains accepted, because it has to be.
+MIN_PLAUSIBLE_YEAR = 1665
 # A surname-initial pair: "Yılmaz, A." / "Smith J." / "Kumar, S. & Patel, R."
 _INITIAL_RE = re.compile(r"(?:^|[\s,;.])([A-ZÇĞİÖŞÜ])[.\s]?(?=[,.;\s]|$)")
 
@@ -342,30 +357,66 @@ def _entries_from_sentences(lines: Sequence[Sentence]) -> list[tuple[str, int]]:
     current = ""
     current_paragraph: int | None = None
     previous_end = -1
+    previous_line: int | None = None
+
+    def flush() -> None:
+        nonlocal current
+        if current:
+            merged.append((current, previous_end))
+            current = ""
 
     for sentence in lines:
         if sentence.location.block_type.value == "heading":
-            if current:
-                merged.append((current, previous_end))
-                current = ""
+            flush()
             current_paragraph = None
             previous_end = -1
+            previous_line = None
             continue
         paragraph = sentence.location.paragraph_index
-        contiguous = (
-            bool(current)
-            and paragraph == current_paragraph
-            and sentence.location.char_start - previous_end <= 2
-        )
-        if not contiguous and current:
-            merged.append((current, previous_end))
-        current = f"{current} {sentence.text}" if contiguous else sentence.text
-        current_paragraph = paragraph
-        previous_end = sentence.location.char_end
+        # A printed bibliography puts one reference per *line*, and a segmenter
+        # that has just read PDF text will hand back a "sentence" spanning several
+        # of them, newline-separated. Measured on a 154-page astrophysics thesis
+        # (arXiv:1407.6566), paragraph boundaries alone found 9 entries where the
+        # bibliography holds hundreds: every entry ran into the next because PDF
+        # text carries no blank lines. So the newlines inside the sentence are
+        # followed first, and a line starts a new entry only once what has
+        # accumulated already reads as finished - which keeps a reference that
+        # wraps across two lines in one piece.
+        pieces = sentence.text.split("\n") if "\n" in sentence.text else [sentence.text]
+        for offset, piece in enumerate(pieces):
+            line_start = sentence.location.line_start + offset
+            if offset > 0 and _looks_complete(current):
+                flush()
+            elif offset > 0 and line_start == previous_line and not current:
+                continue
+            contiguous = (
+                bool(current)
+                and paragraph == current_paragraph
+                and sentence.location.char_start - previous_end <= 2
+            )
+            if not contiguous and current:
+                flush()
+            current = f"{current} {piece.strip()}" if contiguous else piece.strip()
+            current_paragraph = paragraph
+            previous_end = sentence.location.char_end
+            previous_line = line_start
 
-    if current:
-        merged.append((current, previous_end))
+    flush()
     return merged
+
+
+#: A reference is finished once it has a year and the punctuation density of a
+#: bibliographic record: "Abell, G. O. 1958, ApJS, 3, 211" has four commas. A
+#: wrapped continuation line rarely does.
+_COMPLETE_ENTRY_RE = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")
+
+
+def _looks_complete(text: str) -> bool:
+    """Whether ``text`` already reads as a whole bibliographic entry."""
+    stripped = text.strip()
+    if len(stripped) < 25:
+        return False
+    return bool(_COMPLETE_ENTRY_RE.search(stripped)) and stripped.count(",") >= 3
 
 
 #: A new entry begins with a ``Surname, X.`` / ``Surname X.`` author block. A
@@ -394,8 +445,26 @@ def _vet(text: str, index: int, this_year: int) -> ReferenceEntry:
     elif url:
         identifier, identifier_kind = url.group(0).rstrip(".,;"), "url"
 
-    years = [int(y) for y in _YEAR_RE.findall(text)]
-    year = max(years) if years else None
+    # Year extraction is positional, not "the largest number present".
+    #
+    # Measured on the real bibliography of a 154-page astrophysics thesis
+    # (arXiv:1407.6566, 189 entries): taking ``max(years)`` flagged nine entries
+    # as problems when none was. That bibliography is in astronomy style,
+    # ``Author. Year, Journal, Volume, Page [back-references]``, so
+    # "MNRAS, 403, 2063 11" reads 2063 as a year - it is a page number - and
+    # "J. 1958, ApJS, 3, 211 1, 4, 10" would otherwise be outranked by nothing,
+    # while a back-reference like "571 4" could outrank the real year.
+    #
+    # The publication year sits between the authors and the venue, so it is the
+    # first four-digit number that is followed by a comma. Only if that fails does
+    # the scan fall back to any year-shaped number.
+    author_position = _AUTHOR_YEAR_RE.search(text)
+    year: int | None
+    if author_position is not None:
+        year = int(author_position.group(1))
+    else:
+        years = [int(y) for y in _YEAR_RE.findall(text)]
+        year = years[0] if years else None
 
     has_authors = bool(_INITIAL_RE.search(text)) or len(text.split()) >= 4
     has_venue = bool(_VENUE_HINT_RE.search(text))

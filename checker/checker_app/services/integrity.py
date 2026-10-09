@@ -49,6 +49,19 @@ _INVISIBLE = _ZERO_WIDTH | {_SOFT_HYPHEN}
 _CYRILLIC = "абвгдежзийклмнопрстуфхцчшщыэюяАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЫЭЮЯ"
 _GREEK = "αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
 _NON_LATIN = frozenset(_CYRILLIC + _GREEK)
+
+#: Homoglyph substitution is a *Cyrillic* technique, and that is the vector worth
+#: flagging: the Cyrillic alphabet contains lookalikes for every Latin letter an
+#: author would type, and no legitimate reason to use them.
+#:
+#: Greek is different, and including it made this rule fire on physics. Measured on
+#: a real 154-page astrophysics thesis (arXiv:1407.6566) it produced eleven
+#: "homoglyph" findings - ``hν`` for photon energy and ``ǫν`` for a velocity -
+#: every one of them ordinary notation. Flagging those is not a weak signal, it is
+#: a wrong one, and it declares every AI score on scientific text unreliable.
+#: Greek letters mixed into Latin are therefore reported separately, at low
+#: severity, as notation rather than as tampering.
+_CYRILLIC_ONLY = frozenset(_CYRILLIC)
 _CONFUSABLES = str.maketrans(
     {
         "а": "a",
@@ -173,21 +186,57 @@ def check_integrity(text: str) -> IntegrityReport:
         word
         for match in _WORD_RE.finditer(text)
         if (word := match.group(0))
-        and any(ch in _NON_LATIN for ch in word)
-        and any(ch.isalpha() and ch not in _NON_LATIN for ch in word)
+        and any(ch in _CYRILLIC_ONLY for ch in word)
+        and any(ch.isalpha() and ch not in _CYRILLIC_ONLY for ch in word)
     ]
     if homoglyph_words:
         findings.append(
             IntegrityFinding(
                 code="homoglyph",
                 count=len(homoglyph_words),
-                detail="Latin yazıyla karışan Kiril/Yunan harfleri bulundu (homoglyph).",
+                detail="Latin yazıyla karışan Kiril harfleri bulundu (homoglyph).",
                 examples=tuple(homoglyph_words[:5]),
                 severity="high",
             )
         )
 
-    repeats = _REPEAT_PUNCT_RE.findall(text)
+    greek_words = [
+        word
+        for match in _WORD_RE.finditer(text)
+        if (word := match.group(0))
+        and any(ch in _GREEK for ch in word)
+        and any(ch.isalpha() and ch not in _GREEK for ch in word)
+    ]
+    if greek_words:
+        # Informational only. In a scientific text this is notation ("hν",
+        # "ǫν"), which is what it almost always is; a Cyrillic mix is not.
+        findings.append(
+            IntegrityFinding(
+                code="greek_notation",
+                count=len(greek_words),
+                detail=(
+                    "Latin yazıyla karışan Yunan harfleri bulundu. Bilimsel metinde "
+                    "bu genellikle gösterimdir (hν, ǫν) ve tek başına sorun değildir; "
+                    "homoglif saldırısı için bakılacak harf Kiril'dir."
+                ),
+                examples=tuple(greek_words[:5]),
+                severity="low",
+            )
+        )
+
+    # Repeated punctuation touching a digit is notation, not manipulation.
+    #
+    # Measured on a real astrophysics thesis (arXiv:1407.6566), every one of the
+    # five matches was legitimate: a math range "M^0.1...0.6" written twice, and
+    # two ADS bibliographic codes "A&A...534A..120T" and "A&A...558A..75T". All
+    # of them sit against a digit. A run that follows words - "......., Takey"
+    # with an elided author list - is a different thing, and is still reported.
+    repeats = [
+        match.group(0)
+        for match in _REPEAT_PUNCT_RE.finditer(text)
+        if not (text[match.start() - 1 : match.start()].isdigit())
+        and not (text[match.end() : match.end() + 1].isdigit())
+    ]
     if len(repeats) >= 3:
         findings.append(
             IntegrityFinding(
