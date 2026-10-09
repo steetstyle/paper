@@ -1,0 +1,38 @@
+# checker-app runtime dependencies (pinned).
+#
+# Install with the bootstrap script, which creates ./.venv:
+#     bash scripts/bootstrap.sh              # CUDA-enabled torch (needs ~5 GB)
+#     bash scripts/bootstrap.sh --cpu        # CPU-only torch   (needs ~1 GB)
+#
+# Or manually:
+#     python3.12 -m venv .venv
+#     .venv/bin/pip install -U pip
+#     .venv/bin/pip install -r requirements.txt
+#
+# torch is the only heavyweight dependency and it is deliberately NOT pinned to a
+# CUDA build: install it from the PyTorch index that matches your hardware (see
+# the two lines at the bottom, comment out the one you do not need).
+
+# --- core (no model, no torch) ---------------------------------------------
+pydantic==2.14.0
+pydantic-settings==2.15.0
+httpx==0.28.1
+typer==0.27.3
+rich==15.0.0
+beautifulsoup4==4.15.0          # HTML reference sources
+pypdf==6.19.0                   # PDF reference sources
+
+# --- AI signals: perplexity / burstiness + AI classifier -------------------
+transformers==5.19.0
+huggingface-hub==1.33.0
+safetensors==0.8.0
+tokenizers==0.23.2
+numpy==2.5.3
+sentencepiece==0.2.2            # needed by sentencepiece-based causal LMs
+regex==2026.9.29
+
+# --- torch: pick ONE ------------------------------------------------------
+# CUDA (default wheels, ~2.5 GB):
+torch==2.14.1
+# CPU-only (replace the line above with this one):
+# torch==2.14.1+cpu --index-url https://download.pytorch.org/whl/cpu

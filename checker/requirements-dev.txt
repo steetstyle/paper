@@ -1,0 +1,7 @@
+# checker-app development/test dependencies (in addition to requirements.txt).
+-r requirements.txt
+
+pytest==9.1.1
+ruff==0.16.10
+mypy==2.4.0
+pytest-cov==7.0.0
