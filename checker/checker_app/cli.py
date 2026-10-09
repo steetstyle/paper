@@ -672,6 +672,28 @@ def calibrate(
         )
 
 
+def _warn_if_unreadable(target: str, word_count: int) -> None:
+    """Say "the file is unreadable" rather than "the thesis is empty".
+
+    A file that is not a PDF at all - a failed download that saved an HTML error
+    page under a .pdf name, a truncated transfer, a hand rename - used to raise
+    pypdf's own error out of the reader constructor. With that guarded, the only
+    remaining symptom is zero words, which reads as an empty document rather than
+    a broken file. Measured on a real case: a file saved as ``.pdf`` that was
+    entirely HTML.
+    """
+    if word_count:
+        return
+    path = Path(target)
+    if path.suffix.lower() not in {".pdf"}:
+        return
+    console.print(
+        "[yellow]Bu PDF'ten metin çıkarılamadı. Dosya bozuk ya da PDF değil "
+        "(örneğin başarısız bir indirmeden kalan HTML). "
+        "Sıfır cümle, boş tez demek değildir — belge hiç okunamadı.[/yellow]"
+    )
+
+
 @app.command()
 def segment(
     ctx: typer.Context,
@@ -709,6 +731,7 @@ def segment(
         f"dil {result.language} ({result.language_confidence:.2f}) · "
         f"{len(result.blocks)} blok"
     )
+    _warn_if_unreadable(target, result.word_count)
     if json_out:
         json_out.write_text(
             json.dumps(

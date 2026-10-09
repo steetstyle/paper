@@ -519,6 +519,50 @@ kuralı, `1I` yerine `1 I` görmek için birleştirilmiş formu kullanır.
 
 Türkçe harfler de kapsama alındı: `K A Y N A K Ç A` de aynı artefakttır.
 
+### Altıncı tur: global MCP kurulumu ve iki hata
+
+MCP sunucusu `~/.config/opencode/opencode.json` içine **`paper` ile aynı kalıpta**
+`local` olarak kaydedildi, yani artık her oturumda ve her projede `tools["checker"]`
+altında erişilebilir:
+
+```json
+"checker": {
+  "type": "local",
+  "command": ["/…/checker/.venv/bin/python", "-m", "checker_app.mcp.server"],
+  "cwd": "/…/checker",
+  "timeout": 180000,
+  "environment": { "PYTHONPATH": "/…/checker" }
+}
+```
+
+11 araç: `checker_segment`, `checker_scan`, `checker_similarity`, `checker_compliance`,
+`checker_sentences`, `checker_matches`, `checker_compare_revisions`,
+`checker_calibrate`, `checker_doctor`, `checker_patchwork`, `checker_references`.
+
+İlk global çağrı iki hatayı ortaya çıkardı.
+
+#### 13 hashtag: geçersiz Markdown
+
+`checker_segment` bir cümleyi `############# Renormalization and Knot Theory ∗`
+olarak döndürdü. Ham pypdf çıktısında o karakterler **yok** — yani benim
+ürettiğim. Sebep: numarasız bir başlığın seviyesi punto sıralamasından geliyor ve
+bu belgede **13 farklı** başlık punto boyu var; ben de 13 hashtag yazdım.
+Başlık deseni `#{1,6}` kabul ettiği için yazdığım satırı **kendi kendisiyle
+eşleştiremedi** — 18 başlık bloğun türünü kaybetti.
+
+Markdown'ın altı seviyesi var; seviye orada doyduruluyor. On bir gerçek tezin
+tamamında üretilen hiçbir başlık bu sınırı aşmıyor (bir test her tezi açıp denetliyor).
+
+#### `.pdf` uzantılı bir HTML dosyası
+
+Aynı klasördeki `n_1303.3990.pdf` aslında **HTML** — başarısız bir indirmeden
+kalmış. pypdf hataı **okuyucu kurucusunda** fırlatıyor, yani sayfa başına
+konulmuş korumanın göreceği yerde değil, ve araç ham traceback ile çöküyordu.
+
+Şimdi: okunamayan dosya açıkça bildiriliyor — *"Bu PDF'ten metin çıkarılamadı.
+Dosya bozuk ya da PDF değil. Sıfır cümle, boş tez demek değildir — belge hiç
+okunamadı."* Sıfır kelime üreten bir `.pdf` için bu mesaj her komutta çıkıyor.
+
 ### Kalan sınırlar (ölçülmüş, gizlenmiyor)
 
 - **2203.03469'da `Part I` / `Part II` bölüm başlıkları bulunamıyor** — 12pt'te
@@ -882,7 +926,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             399 test, model indirmeden
+├── tests/             401 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

@@ -311,6 +311,48 @@ def test_the_role_lookup_sees_a_rejoined_keyword_but_the_report_does_not() -> No
         assert _PDF_STANDALONE_KEYWORD_RE.match(joined), spaced_form
 
 
+# --------------------------------------------------------------------- depth
+def test_a_level_beyond_markdowns_six_is_saturated() -> None:
+    """A thesis can use more distinct heading sizes than Markdown has levels.
+
+    Measured on arXiv:q-alg/9607022: thirteen sizes produced thirteen leading
+    hashes, and the heading pattern allows ``#{1,6}``, so the line was written and
+    then failed to match itself - eighteen headings lost their block type.
+    """
+    from checker_app.services.sources import PDF_HEADING_MAX_LEVEL
+
+    ranks = {10.9 + step: step for step in range(1, 14)}
+    body = BODY
+    smallest, largest = min(ranks), max(ranks)
+    assert len(ranks) == 13, "varsayım: Markdown'ın altı seviyesinden fazlası"
+    level = _pdf_heading_level("Unnumbered front matter", largest, body, ranks)
+    assert level == PDF_HEADING_MAX_LEVEL, "doygunluk uygulanmalı"
+    assert _pdf_heading_level("Smallest heading", smallest, body, ranks) == 1
+    # Still monotonic in size below the cap.
+    middle = sorted(ranks)[2]
+    assert 1 < _pdf_heading_level("Middle heading", middle, body, ranks) < level
+
+
+def test_no_emitted_heading_ever_exceeds_markdown_depth() -> None:
+    """End-to-end over every real thesis measured, checked as text."""
+    import re
+    from pathlib import Path
+
+    import pytest
+
+    from checker_app.services.sources import PDF_HEADING_MAX_LEVEL, _extract_pdf
+
+    fixtures = sorted(Path("/tmp/opencode/real").glob("*.pdf"))
+    if not fixtures:
+        pytest.skip("gerçek tez örnekleri yok")
+    for path in fixtures:
+        for line in _extract_pdf(path).split("\n"):
+            if re.match(r"^#", line):
+                assert len(line) - len(line.lstrip("#")) <= PDF_HEADING_MAX_LEVEL, (
+                    f"{path.name}: {line[:60]!r}"
+                )
+
+
 # ------------------------------------------------------------------- footers
 def test_a_bare_page_number_is_dropped() -> None:
     """A footer is a bare number, and it is load-bearing too.

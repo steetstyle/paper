@@ -276,6 +276,20 @@ PDF_HEADING_MAX_CHARS = 120
 #: were promoted to top-level sections. One character is never a heading.
 PDF_HEADING_MIN_CHARS = 3
 
+#: Markdown has six heading levels and nothing above them.
+#:
+#: The size rank of an *unnumbered* heading is whatever its point size happens to
+#: be among the heading sizes, and a thesis can use far more than six of them.
+#: Measured on arXiv:q-alg/9607022: thirteen distinct heading sizes produced
+#: thirteen leading hashes, and ``_HEADING_RE`` - which allows ``#{1,6}`` - then
+#: failed to match the line it had just written, so the heading was emitted and
+#: simultaneously not recognised. Eighteen headings in that thesis and two in
+#: arXiv:0911.2782 were affected.
+#:
+#: Saturating at six loses only the ordering among levels beyond six, which was
+#: never information a reader could use.
+PDF_HEADING_MAX_LEVEL = 6
+
 #: Tracked type: "I N T R O D U C T I O N" is one word that a PDF extractor hands
 #: back letter-spaced, because that is what the tracking looks like in the content
 #: stream. Measured on arXiv:2203.03469, every chapter heading of that 219-page
@@ -391,8 +405,10 @@ def _pdf_heading_level(
     if numbered is not None:
         return len(numbered.group(1).split("."))
     # Front matter (Abstract, Acknowledgements, Contents) is often centred at
-    # heading size without a number; the size rank gives it a level.
-    return size_rank.get(round(font_size, 1), 1)
+    # heading size without a number; the size rank gives it a level, saturating at
+    # Markdown's six because a thesis can use more distinct heading sizes than
+    # that and a thirteenth hash matches nothing.
+    return min(size_rank.get(round(font_size, 1), 1), PDF_HEADING_MAX_LEVEL)
 
 
 def _extract_pdf(path: Path) -> str:
@@ -421,8 +437,22 @@ def _extract_pdf(path: Path) -> str:
         logger.warning("pypdf yok; PDF karşılaştırılamıyor: %s", path)
         return ""
 
-    reader = PdfReader(str(path))
+    try:
+        reader = PdfReader(str(path))
+        page_count = len(reader.pages)
+    except Exception as error:  # noqa: BLE001
+        # Not a PDF, or a truncated one. Both happen in practice - a failed
+        # download, a server that answers with HTML, a file renamed by hand - and
+        # pypdf raises from the constructor before any page is touched, so the
+        # per-page guard below never sees it. Crashing with a pypdf traceback on
+        # a file the user believes is a thesis is the worst possible answer.
+        logger.warning("PDF açılamadı (%s): %s", type(error).__name__, path)
+        return ""
+
     per_page: list[list[tuple[str, float]]] = []
+    if page_count == 0:
+        logger.warning("PDF sayfa içermiyor: %s", path)
+        return ""
     for page in reader.pages:
         runs: list[tuple[str, float]] = []
 

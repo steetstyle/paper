@@ -857,7 +857,7 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 | TR perplexity kalibrasyonu | insan medyan log10 ≈ 1.55, AI-benzeri ≈ 1.38 | `scripts/calibrate.py` |
 | EN perplexity kalibrasyonu | insan ≈ 1.69, AI-benzeri ≈ 1.39 | aynı |
 | Kod AST testleri | 12 | `tests/test_code_ast.py` |
-| Toplam test | 399, model indirmeden ~5 sn | `make test` |
+| Toplam test | 401, model indirmeden ~5 sn | `make test` |
 | MCP uçtan uca | 11 araç gerçek stdio istemcisiyle | `make mcp-test` |
 | Raporlama tabanı ölçümü (yalnız stilometri, modeller kapalı) | gerçekçi TR giriş metni AI payı **%0.0**; jenerik metin **%57.7** | `tests/test_mcp.py` |
 | Kalibrasyon koruması, gerçek korpusta | 9 örnek (6 insan + 3 AI cümle) → **ölçülmedi**, "olasılık olarak okunamaz" | `checker calibrate --human-dir … --machine-dir …` |
