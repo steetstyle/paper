@@ -94,6 +94,20 @@ Rules worth knowing before you trust a number:
   - YOK sets no similarity percentage; each institute board does. The common
     Turkish filters are "bibliography excluded, quotations included, matches under
     5 words excluded".
+  - **The two languages have different baselines, by roughly 3x.** Turkish theses
+    measure 28.7% +/- 11.58 similarity (n=600); clean English dissertations
+    measure **9% +/- 6%** (n=360). `checker_similarity` picks the baseline and the
+    institutional bands from the detected document language. For English the
+    *measured* optimal cutoff is **15%** (sensitivity 84.8%, specificity 80.5%,
+    AUC 0.902); 25-30% is a policy ceiling, not an observed normal.
+  - **English AI prevalence is field-dependent.** arXiv CS abstracts 22.5%
+    versus mathematics 7.7% (introductions 4.1%), estimator error under 3.5
+    points. Mathematics is the one field where introductions are *less* modified
+    than abstracts, so reading it against the CS figure inverts the prior.
+  - **English thresholds must be section- and length-banded.** Detector accuracy
+    on academic prose runs 0.86 humanities to 0.51 science, and 0.87 at 300-330
+    words to 0.56 at 450-550 (Hadra et al. 2026). A single document-level English
+    score is wrong.
   - Turkish detectors fail on Turkish academic prose, measured. Altıntop (2026,
     DOI 10.56493/nkusbmyo.1866431) ran eight detectors on a 5,715-word Turkish
     academic text written with no AI at all: Justdone called it 89% AI, ZeroGPT
@@ -301,6 +315,7 @@ def _verdict(report) -> dict[str, Any]:  # noqa: ANN001
         "ai_flagged_words": report.ai_flagged_words,
         "below_ai_reporting_floor": report.below_ai_reporting_floor,
         "style_context": _style_context(report),
+        "english_context": report.english_context.to_dict() if report.english_context else None,
         "document_ai_claim": None if report.below_ai_reporting_floor else report.ai_score,
         "document_ai_claim_note": (
             "AI kapsamı %20'nin altında: belge düzeyinde AI iddiası üretilmiyor, "
@@ -540,7 +555,12 @@ def checker_scan(
         "excluded, plus a per-source breakdown and the published thresholds of YTÜ, "
         "İstanbul, Başkent, ESÜ, Çukurova and Akdeniz. Also reports the citation status of "
         "every match (cited_and_quoted = legitimate reuse) and compares the percentage with "
-        "the measured Turkish-thesis distribution (mean 28.7%, SD 11.58, n=600). No model "
+        "the measured Turkish-thesis distribution (mean 28.7%, SD 11.58, n=600), the "
+        "measured Turkish AI-presence distribution (204 articles, mean 20%), and - "
+        "important for a thesis citing foreign literature - which languages the reference "
+        "sources were in. Cross-language reuse detection is much weaker (precision 80% "
+        "untranslated, 26.7% translated, 16.7% translated-then-paraphrased), so a zero "
+        "with English-only references is not evidence of originality. No model "
         "weights needed."
     ),
     annotations=_ann(**_READ_ONLY_LOCAL),
@@ -588,6 +608,14 @@ def checker_similarity(
     # Flatten the headline percentages: a caller should not need to know how
     # ``SimilarityReport.to_dict`` nests them.
     payload.update(payload.pop("similarity", {}))
+    coverage = payload.get("language_coverage")
+    if coverage and coverage.get("cross_language_sources"):
+        # Say it here rather than letting a zero be read as "no overlap": with
+        # cross-language references, precision falls from 80% to 26.7%.
+        payload["interpretation"] = (
+            f"{coverage['reading']} A match found in a cross-language source is "
+            "strong evidence; a match *not* found there is not evidence of absence."
+        )
     return {
         "document": _document_summary(report),
         "similarity": payload,
@@ -1082,6 +1110,15 @@ async def _disclaimer_resource() -> str:
         f"{AI_DEGREE_CAVEAT}\n\n"
         f"{AI_HUMAN_BASELINE}\n\n"
         f"{AI_TURKISH_FPR}\n\n"
+        "YÖK, ulusal bir benzerlik yüzdesi belirlemiyor; her enstitü kurulu belirliyor. "
+        "Yaygın Türkçe filtreler: kaynakça hariç, alıntılar dahil, 5 kelimeden az "
+        "eşleşmeler hariç.\n\n"
+        "İki dilin tabanı yaklaşık 3 KAT farklıdır: Türkçe tezler %28.7 ± 11.58 "
+        "(n=600), temiz İngilizce doktora tezleri %9 ± 6 (n=360). İngilizce için "
+        "ÖLÇÜLMÜŞ optimal eşik %15'tir (duyarlılık %84.8, özgüllük %80.5, AUC "
+        "0.902); %25-30 bir politik tavandır, gözlenen normal değil. "
+        "Yayımlanmış İngilizce AI yaygınlığı alana göre değişir: arXiv CS özetleri "
+        "%22.5, matematik %7.7 (girişler %4.1), tahmin hatası <3.5 puan.\n\n"
         "Kurumsal arka plan: RAID (arXiv:2405.07940) ekibi dedektörlerin cezai "
         "bağlamda kullanımına itiraz ediyor; IEEE S&P 2026 ticari dedektörlerin "
         "akademik kararlarda kullanım için uygun olmadığını ve FPR aralığının "

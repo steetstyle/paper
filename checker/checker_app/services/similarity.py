@@ -40,7 +40,10 @@ __all__ = [
     "SimilarityStats",
     "SimilarityReport",
     "TurkishBaseline",
+    "EnglishBaseline",
     "TurkishAiPresence",
+    "LanguageCoverage",
+    "build_language_coverage",
     "build_similarity_report",
 ]
 
@@ -55,6 +58,23 @@ class InstitutionBand:
     single_source: float | None
     url: str
     note: str = ""
+    language: str = "tr"
+    """Which document language this rule applies to.
+
+    Turkish and English thresholds are not interchangeable: the measured clean
+    corpus differs by roughly 3x (28.7% vs 9%), so a Turkish rule applied to an
+    English thesis would flag three quarters of a normal one, and vice versa.
+    """
+
+    no_threshold_reason: str = ""
+    """Some institutions publish a rule that is *about* not having a number.
+
+    Rhodes: staff "may not set an acceptable percentage on the similarity index
+    ... the similarity index is not an indication of levels of plagiarism."
+    Glasgow Caledonian: "there can be no cutoff point where plagiarism begins and
+    ends". Those are real, citable positions and belong in a report as such -
+    not as an empty row.
+    """
 
 
 # Percentages, exactly as published by each institution (2023-2026 access dates).
@@ -99,7 +119,246 @@ INSTITUTION_BANDS: tuple[InstitutionBand, ...] = (
         "https://babe.cu.edu.tr/cu/ogrenci/turnitin-intihal-benzesim-programi-kullanim-ilkeleri-ve-kullanim-kilavuzu-turnitin-plagiarism-program/turnitin-intihal-benzesim-programi-kullanim-ilkeleri",
         "%30 üzeri yazılı açıklama ister; kurum bunun 'hukuken intihal yok' demek olmadığını vurgular",
     ),
+    # ---------------------------------------------------------------- English
+    # Every URL below was fetched, not inferred. Each row also carries the filter
+    # configuration the institution specifies, because the same document scores
+    # differently under different filters.
+    InstitutionBand(
+        "Virginia Tech, Graduate School",
+        25.0,
+        25.0,
+        5.0,
+        "https://graduateschool.vt.edu/faculty-and-staff-resources/ithenticate.html",
+        "eşiği aşan ETD ek incelemeye gider; NOT: VT'nin Honor System sayfası "
+        "%15 de yayımlıyor, iki canlı sayfa birbiriyle çelişiyor — tek sayı "
+        "olarak alıntılanmamalı",
+        language="en",
+    ),
+    InstitutionBand(
+        "University of East Anglia (UK)",
+        20.0,
+        20.0,
+        None,
+        "https://assets.uea.ac.uk/f/185167/x/153d8f068d/plagiarism-and-collusion-2018-2019.pdf",
+        "hacme göre bantlar: <%5 düşük, %5-20 orta, >%20 yüksek",
+        language="en",
+    ),
+    InstitutionBand(
+        "Muhammad Ali Jinnah University (Pakistan), HEC kuralı",
+        20.0,
+        20.0,
+        5.0,
+        "https://jinnah.edu/plagiarism-policy/",
+        "kendi yayınlarından gelen benzerlik hariç tutulur",
+        language="en",
+    ),
+    InstitutionBand(
+        "Charles Sturt University (Australia)",
+        25.0,
+        25.0,
+        None,
+        "https://cdn.csu.edu.au/__data/assets/pdf_file/0006/3912117/Interpreting-Similarity-Reports.pdf",
+        "kurumun kendi örneği: doğru alıntılanıp kaynak gösterilmiş bir deneme "
+        "%30 çıktı ve intihal YOKTU. Eşik karar değil, soru başlatıcıdır",
+        language="en",
+    ),
+    InstitutionBand(
+        "Panjab University (India) — bölüm bazlı",
+        20.0,
+        20.0,
+        None,
+        "https://newmodel.pau.edu/anti-plagiarism-policy",
+        "tez için: giriş %30, literatür %50, yöntem %25, sonuç %10, tartışma %10, "
+        "özet %10, tam tez %20. Literatür taraması %50'ye kadar meşru sayılıyor",
+        language="en",
+    ),
+    InstitutionBand(
+        "Rhodes University (South Africa)",
+        None,
+        None,
+        None,
+        "https://www.ru.ac.za/media/rhodesuniversity/content/deanofstudents/documents/Common_Faculty_Policy_and_Procedures_on_Plagiarism.pdf",
+        "kurum öğretim üyesinin benzerlik endeksi için kabul edilebilir yüzde "
+        "belirlemesine izin vermiyor: 'benzerlik endeksi intihal düzeyinin göstergesi değildir'",
+        language="en",
+        no_threshold_reason=(
+            "Kurum sayısal eşik koymayı reddediyor ve endeksin bir suçluluk ölçütü "
+            "olmadığını açıkça söylüyor."
+        ),
+    ),
+    InstitutionBand(
+        "Glasgow Caledonian University (UK)",
+        None,
+        None,
+        None,
+        "https://www.gcu.ac.uk/__data/assets/pdf_file/0015/36222/gcu20similarity20checking20policy.pdf",
+        "'intihalin başladığı ve bittiği bir kesim noktası yoktur'; ayrıca en küçük "
+        "eşleşme eşiğini 3 veya altına çekmenin puanı şişirdiğini uyarıyor",
+        language="en",
+        no_threshold_reason=(
+            "Kurum eşik kavramını reddediyor ve ayrıca filtre ayarının puanı "
+            "nasıl bozabileceğini ölçüyor."
+        ),
+    ),
+    InstitutionBand(
+        "Australian National University",
+        None,
+        None,
+        None,
+        "https://policies.anu.edu.au/ppl/document/ANUP_012815",
+        "tezle birlikte iThenticate raporu isteniyor, sayısal eşik yayımlanmıyor",
+        language="en",
+        no_threshold_reason="Rapor zorunlu, eşik yok.",
+    ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class EnglishBaseline:
+    """The measured English reference - and it is *three times lower* than Turkish.
+
+    This is the correction that matters most for English mode. The Turkish
+    baseline says a thesis averages 28.7% ± 11.58 (n=600, education sciences,
+    Toprak 2014). Applying that to an English thesis would flag roughly **three
+    quarters of a normal, well-cited thesis**.
+
+    ================================  =========  ====
+    English corpus                            mean        SD
+    ================================  =========  ====
+    **360 US dissertations** (adjusted)      **9%**    **6%**
+    360 published articles, same field      11%     10%
+    ================================  =========  ====
+
+    Source: Mayes, *A Content Originality Analysis of HRD Focused Dissertations
+    and Published Academic Articles using TurnItIn* (2017), 360 dissertations in
+    HRD / training / organisational / career development. Level distribution:
+    88.1% low, 9.7% high (.15-.24), **2.2%** excessive (.25-1.00). So even in the
+    worst band only 2.2% of dissertations cross 25%.
+
+    Two further results from that study matter for how the percentage is read:
+
+    * **The only significant predictors of a high score were the reference count
+      and the word count** (multinomial logistic regression, Nagelkerke
+      pseudo-R² = 0.169). A long bibliography inflates the score; nothing about
+      the writing does.
+    * **Removing false positives - reference lists the tool failed to exclude -
+      changed scores significantly.** Which is why this tool excludes the
+      bibliography by default and says so.
+
+    And the line that is *measured* rather than chosen:
+
+    ==============================  ========  ============
+    empirically optimal cutoff        15%     sens. **84.8%**
+                                                  spec. **80.5%**
+    ==============================  ========  ============
+
+    Higgins, Lin & Evans, *Research Integrity and Peer Review* 1:13 (2016),
+    DOI 10.1186/s41073-016-0021-8, on 400 manuscripts manually verified:
+    plagiarised mean **25.8** (SD 9.9, n=66), non-plagiarised mean **11.5**
+    (SD 6.2, n=333), p < 0.001, AUC **0.902** (95% CI 0.863-0.940). Restricting
+    to Abstract/Introduction/Results/Discussion widened the gap: plagiarised
+    **25.7**, non-plagiarised **5.6**.
+
+    So for English there are two different numbers, and conflating them is the
+    common mistake: **15% is where detection actually works; 25-30% is a policy
+    ceiling that a normal thesis never approaches.**
+    """
+
+    mean_percent: float = 9.0
+    sd_percent: float = 6.0
+    article_mean_percent: float = 11.0
+    article_sd_percent: float = 10.0
+    excessive_share: float = 0.022
+    """Dissertations above 25%, after adjustment."""
+
+    optimal_cutoff_percent: float = 15.0
+    """Where detection was empirically validated, not where a policy sits."""
+
+    cutoff_sensitivity: float = 0.848
+    cutoff_specificity: float = 0.805
+    cutoff_auc: float = 0.902
+
+    plagiarised_mean: float = 25.8
+    plagiarised_sd: float = 9.9
+    clean_mean: float = 11.5
+    clean_sd: float = 6.2
+    section_only_plagiarised: float = 25.7
+    section_only_clean: float = 5.6
+    non_native_share_of_cases: float = 0.82
+    """82% of confirmed plagiarised manuscripts came from countries where English
+    is not an official language (55 of 66). Stated as a caution about L2 writing,
+    not as evidence about authorship."""
+
+    sample_size: int = 360
+    field: str = "HRD / eğitim geliştirme (ABD)"
+    source: str = (
+        "Mayes (2017), 360 US dissertations; cutoff Higgins vd. (2016), "
+        "DOI 10.1186/s41073-016-0021-8"
+    )
+    #: Overwritten by ``SimilarityReport.to_dict``; a dataclass field cannot
+    #: depend on a sibling's value, and this only exists to give ``to_dict`` a
+    #: z-score to print.
+    similarity_for_note: float = 0.0
+    caveat: str = (
+        "ABD, tek alan (HRD), 2017 öncesi. Türkçe tezlerin %28.7 ortalamasıyla "
+        "aynı ölçek değildir: dil, kaynak kültürü ve alan birlikte değişir. "
+        "Tezler için bölüm bazlı bir İngilizce dağılım yayımlanmamıştır."
+    )
+
+    def percentile_note(self, percent: float) -> str:
+        if self.mean_percent <= 0:
+            return ""
+        sigma = (percent - self.mean_percent) / self.sd_percent
+        return (
+            f"ölçülen doktora tezi ortalaması {self.mean_percent}% ± {self.sd_percent} "
+            f"→ z={sigma:+.2f}"
+        )
+
+    def reading(self, percent: float) -> str:
+        if percent >= 25.0:
+            verdict = (
+                f"%{percent:.1f} eşiğin üstünde; ama Charles Sturt'un örnek vakasında "
+                "doğru alıntılanıp kaynak gösterilmiş bir deneme %30 çıkmıştı ve "
+                "intihal yoktu. Eşiği aşmak tez zorunluluğu değildir."
+            )
+        elif percent >= self.optimal_cutoff_percent:
+            verdict = (
+                f"%{percent:.1f} ölçülmüş optimal eşiğin (%{self.optimal_cutoff_percent:.0f}) "
+                f"üstünde; bu eşikte duyarlılık %{self.cutoff_sensitivity * 100:.1f}, "
+                f"özgüllük %{self.cutoff_specificity * 100:.1f} olarak doğrulandı."
+            )
+        else:
+            verdict = (
+                f"%{percent:.1f} ölçülmüş eşiğin altında. Temiz doktora tezi ortalaması "
+                f"%{self.mean_percent:.0f} ± {self.sd_percent:.0f}; yani bu aralık "
+                "normaldir."
+            )
+        return f"{verdict} Kaynak: {self.source}. {self.caveat}"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mean_percent": self.mean_percent,
+            "sd_percent": self.sd_percent,
+            "published_article_mean_percent": self.article_mean_percent,
+            "published_article_sd_percent": self.article_sd_percent,
+            "dissertations_above_25_percent": self.excessive_share,
+            "optimal_cutoff_percent": self.optimal_cutoff_percent,
+            "cutoff_sensitivity": self.cutoff_sensitivity,
+            "cutoff_specificity": self.cutoff_specificity,
+            "cutoff_auc": self.cutoff_auc,
+            "plagiarised_mean": self.plagiarised_mean,
+            "plagiarised_sd": self.plagiarised_sd,
+            "clean_mean": self.clean_mean,
+            "clean_sd": self.clean_sd,
+            "section_only_plagiarised": self.section_only_plagiarised,
+            "section_only_clean": self.section_only_clean,
+            "non_native_share_of_confirmed_cases": self.non_native_share_of_cases,
+            "sample_size": self.sample_size,
+            "field": self.field,
+            "source": self.source,
+            "caveat": self.caveat,
+            "note": self.percentile_note(self.similarity_for_note),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +482,79 @@ class TurkishAiPresence:
 
 
 @dataclass(frozen=True, slots=True)
+class LanguageCoverage:
+    """What share of the matched words came from a same-language source.
+
+    The ordinary case for a Turkish thesis is that its references are English or
+    German, and reuse detection is measurably weaker across that boundary:
+    precision **80%** on untranslated text, **26.7%** on translated text and
+    **16.7%** on translated-then-paraphrased text (DOI 10.33806/ijaes1026). So a
+    clean percentage in that setting is partly a statement about what was
+    supplied, not about the thesis - and this object says which case you are in
+    instead of leaving it to be guessed.
+    """
+
+    document_language: str = "tr"
+    same_language_sources: int = 0
+    cross_language_sources: int = 0
+    same_language_words: int = 0
+    cross_language_words: int = 0
+    unknown_language_sources: int = 0
+    sources_by_language: Mapping[str, int] = field(default_factory=dict)
+    words_by_language: Mapping[str, int] = field(default_factory=dict)
+    evidence: str = (
+        "Çeviri altında tespit kesinliği düşer: çeviri yok %80, çeviri %26.7, "
+        "çeviri+paraphrase %16.7 (DOI 10.33806/ijaes1026). Türkçe bir tezin "
+        "kaynakları çoğunlukla başka dilde olduğundan, düşük benzerlik yüzdesi "
+        "kısmen verilen kaynak kümesinin bir özelliğidir."
+    )
+
+    @property
+    def cross_language_ratio(self) -> float:
+        total = self.same_language_words + self.cross_language_words
+        return self.cross_language_words / total if total else 0.0
+
+    def reading(self) -> str:
+        total = self.same_language_sources + self.cross_language_sources + self.unknown_language_sources
+        if not total:
+            return "Kaynak verilmedi."
+        if self.cross_language_sources == 0:
+            return (
+                f"Kaynakların tümü belge diliyle aynı ({self.document_language}): "
+                f"{self.same_language_sources} kaynak, {self.same_language_words} kelime eşleşti."
+            )
+        if self.same_language_sources == 0:
+            return (
+                f"Kaynakların tümü belge dilinden FARKLI ({self.cross_language_sources} kaynak); "
+                f"bunlardan {self.cross_language_words} kelime eşleşti. Çapraz dil olduğu "
+                "için tespit duyarlılığı bilinçli olarak düşüktür — bulunan eşleşmeler "
+                "güçlü kanıttır, bulunamayanlar kanıt DEĞİLDİR. Kaynak kümesine İngilizce "
+                "ya da aynı dilde bir kaynak eklemek sonucu doğrulamak için en ucuz adımdır."
+            )
+        return (
+            f"{self.same_language_sources} kaynak belge diliyle aynı "
+            f"({self.same_language_words} kelime), {self.cross_language_sources} kaynak "
+            f"farklı ({self.cross_language_words} kelime, %{self.cross_language_ratio * 100:.0f}). "
+            "Çapraz dil kısımda tespit duyarlılığı düşüktür."
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "document_language": self.document_language,
+            "same_language_sources": self.same_language_sources,
+            "cross_language_sources": self.cross_language_sources,
+            "unknown_language_sources": self.unknown_language_sources,
+            "same_language_words": self.same_language_words,
+            "cross_language_words": self.cross_language_words,
+            "cross_language_ratio": round(self.cross_language_ratio, 4),
+            "sources_by_language": dict(self.sources_by_language),
+            "words_by_language": dict(self.words_by_language),
+            "reading": self.reading(),
+            "evidence": self.evidence,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SourceShare:
     """How much of the document one reference accounts for."""
 
@@ -272,9 +604,20 @@ class SimilarityReport:
     attribution: dict[str, int] = field(default_factory=dict)
     bands: tuple[dict[str, object], ...] = ()
     baseline: TurkishBaseline = field(default_factory=TurkishBaseline)
+    english_baseline: EnglishBaseline | None = None
+    """Used when the document is English.
+
+    Not optional decoration: the two baselines differ by roughly 3x (28.7% vs
+    9%), so applying the Turkish one to an English thesis would flag about three
+    quarters of a normal, well-cited thesis. Set by ``document_language``."""
     ai_presence: TurkishAiPresence = field(default_factory=TurkishAiPresence)
     """What AI presence in Turkish academic writing actually looks like, so the
     AI share has a Turkish reference the way the similarity percentage does."""
+
+    language_coverage: LanguageCoverage | None = None
+    """Which matched words came from a same-language source. Reported because a
+    Turkish thesis citing English literature is the ordinary case, and reuse
+    detection across that boundary is measurably weaker."""
     filters: str = "kaynakça hariç · alıntılar dahil · 5 kelimeden az eşleşmeler hariç"
     filters_applied: dict[str, object] = field(default_factory=dict)
 
@@ -339,6 +682,19 @@ class SimilarityReport:
                 "note": self.baseline.percentile_note(self.similarity_incl_quotes),
             },
             "turkish_ai_presence": self.ai_presence.to_dict(),
+            "english_baseline": (
+                replace(self.english_baseline, similarity_for_note=self.similarity_incl_quotes).to_dict()
+                if self.english_baseline
+                else None
+            ),
+            "applied_baseline": (
+                "english"
+                if self.english_baseline is not None
+                else "turkish"
+            ),
+            "language_coverage": (
+                self.language_coverage.to_dict() if self.language_coverage else None
+            ),
         }
 
 
@@ -351,8 +707,10 @@ def build_similarity_report(
     quote_spans: Sequence[Span] = (),
     statuses: dict[int, CitationStatus] | None = None,
     min_match_words: int = 5,
+    document_language: str = "tr",
     exclude_references: bool = True,
     include_quotes: bool = True,
+    source_languages: Mapping[str, str] | None = None,
 ) -> SimilarityReport:
     """Compute the institutional-style percentages.
 
@@ -453,12 +811,88 @@ def build_similarity_report(
             "min_match_words": min_match_words,
         },
     )
-    return replace(report, bands=_evaluate_bands(report))
+    if source_languages:
+        report = replace(
+            report,
+            language_coverage=build_language_coverage(
+                document_language=document_language,
+                source_languages=source_languages,
+                per_source_covered=per_source_covered,
+            ),
+        )
+    if document_language.startswith("en"):
+        # The English reference is three times lower than the Turkish one, so the
+        # choice is a correctness issue, not a nicety.
+        report = replace(report, english_baseline=EnglishBaseline())
+    return replace(report, bands=_evaluate_bands(report, document_language=document_language))
 
 
-def _evaluate_bands(report: SimilarityReport) -> tuple[dict[str, object], ...]:
+def build_language_coverage(
+    *,
+    document_language: str,
+    source_languages: Mapping[str, str],
+    per_source_covered: Mapping[str, set[int]],
+) -> LanguageCoverage:
+    """Split the matched words by whether the source was the same language.
+
+    Built from the per-source coverage sets rather than the match list, so the
+    word counts are the ones that actually went into the percentage - a match
+    excluded by the institutional filters does not inflate this.
+
+    The *source* counts, on the other hand, cover every supplied source. A
+    report that said "language not determined" because nothing matched would be
+    hiding the most useful thing the reader can learn from a zero result: that
+    all four of their references were in English, which is precisely why nothing
+    was found.
+    """
+    same_words = 0
+    cross_words = 0
+    same_sources = 0
+    cross_sources = 0
+    unknown_sources = 0
+    sources_by_language: dict[str, int] = {}
+    words_by_language: dict[str, int] = {}
+
+    for language in source_languages.values():
+        sources_by_language[language] = sources_by_language.get(language, 0) + 1
+        if language == document_language:
+            same_sources += 1
+        elif language == "unknown":
+            unknown_sources += 1
+        else:
+            cross_sources += 1
+
+    for source_id, indices in per_source_covered.items():
+        language = source_languages.get(source_id, "unknown")
+        words_by_language[language] = words_by_language.get(language, 0) + len(indices)
+        if language == document_language:
+            same_words += len(indices)
+        elif language != "unknown":
+            cross_words += len(indices)
+
+    return LanguageCoverage(
+        document_language=document_language,
+        same_language_sources=same_sources,
+        cross_language_sources=cross_sources,
+        unknown_language_sources=unknown_sources,
+        same_language_words=same_words,
+        cross_language_words=cross_words,
+        sources_by_language=sources_by_language,
+        words_by_language=words_by_language,
+    )
+
+
+def _evaluate_bands(
+    report: SimilarityReport, *, document_language: str = "tr"
+) -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
+    # Only the bands written for this document's language. Applying Turkish
+    # thresholds to an English thesis would be worse than useless: the measured
+    # clean corpus is 9% for English and 28.7% for Turkish.
+    language = "en" if document_language.startswith("en") else "tr"
     for band in INSTITUTION_BANDS:
+        if band.language != language:
+            continue
         issues: list[str] = []
         if band.total_excl_quotes is not None and (
             report.similarity_excl_quotes > band.total_excl_quotes
@@ -493,6 +927,8 @@ def _evaluate_bands(report: SimilarityReport) -> tuple[dict[str, object], ...]:
                     "single_source_percent": band.single_source,
                 },
                 "issues": issues,
+                    "no_threshold_reason": band.no_threshold_reason,
+                    "language": band.language,
                 "status": "uygun" if not issues else "gözden geçirilmeli",
             }
         )

@@ -168,6 +168,28 @@ def _similarity_block(report: DocumentReport) -> str:
     for key, count in report_similarity.attribution.items():
         lines.append(f"| {key} | {count} |")
     baseline = report_similarity.baseline
+    if report_similarity.english_baseline is not None:
+        english = report_similarity.english_baseline
+        lines.append(
+            f"\nÖlçülen **İngilizce** referans: doktora tezi ortalaması "
+            f"**{english.mean_percent}%** ± {english.sd_percent} "
+            f"(n={english.sample_size}, {english.field}). Türkçe referansın "
+            "yaklaşık üçte biri; İngilizce bir belgeye Türkçe eşik uygulamak "
+            "normali bir tezin büyük kısmını işaretlerdi.\n"
+        )
+        lines.append(f"\n{english.reading(report_similarity.similarity_incl_quotes)}")
+        lines.append(
+            f"\n- Ölçülmüş **optimal eşik %{english.optimal_cutoff_percent:.0f}**: "
+            f"duyarlılık %{english.cutoff_sensitivity * 100:.1f}, "
+            f"özgüllük %{english.cutoff_specificity * 100:.1f}, AUC {english.cutoff_auc}. "
+            "Kurumsal %25-30 tavanı bir *politik* sınırdır, gözlenen normal değil."
+        )
+        lines.append(
+            f"\n- Doğrulanmış intihal vakalarının %{english.non_native_share_of_cases * 100:.0f}'si "
+            "İngilizcenin resmî dil olmadığı ülkelerden. Ana dilini İngilizce "
+            "olmayan yazarın metni düşük leksik çeşitlilik gösterebilir ve yine "
+            "tamamen insani olabilir."
+        )
     lines.append(
         f"\nÖlçülen Türkçe tez dağılımı: ortalama **{baseline.mean_percent}%** "
         f"± {baseline.sd_percent} (n={baseline.sample_size}, {baseline.field}); "
@@ -175,6 +197,12 @@ def _similarity_block(report: DocumentReport) -> str:
         f"{baseline.english_percent}%. Kaynak: {baseline.source}. "
         f"{baseline.caveat}"
     )
+    coverage = report_similarity.language_coverage
+    if coverage is not None:
+        lines.append(f"\n**Dil kapsamı:** {coverage.reading()}")
+        lines.append(f"\n> {coverage.evidence}")
+    presence = report_similarity.ai_presence
+    lines.append(f"\n{presence.to_dict()['reading']}")
     lines.append("\n| Kurum | Eşikler | Durum |")
     lines.append("|---|---|---|")
     for band in report_similarity.bands:
@@ -189,7 +217,11 @@ def _similarity_block(report: DocumentReport) -> str:
             if value is not None
         )
         detail = "; ".join(band["issues"]) if band["issues"] else "eşik aşılmadı"
-        lines.append(f"| {band['institution']} | {bits} | {detail} |")
+        reason = band.get("no_threshold_reason")
+        if reason:
+            detail = reason
+        thresholds_text = bits or "sayısal eşik yok"
+        lines.append(f"| {band['institution']} | {thresholds_text} | {detail} |")
     return "\n".join(lines)
 
 

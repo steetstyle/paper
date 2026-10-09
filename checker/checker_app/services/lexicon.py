@@ -195,6 +195,48 @@ _PRESENTATIVE_TR = (
     r"\bbu tezde\b",
     r"\b(?:amaç|amacımız)\b[^.]{0,40}\b(?:incelemektir|incelemektedir)\b",
 )
+# The English counterpart of ``_PRESENTATIVE_TR``. Same weight, same severity,
+# and the same reason it exists: a methods sentence in the presentative passive is
+# register, not authorship. English academic prose leans on it harder than
+# Turkish does, so leaving the rule Turkish-only would have made an English scan
+# systematically score *lower* for the same sentence - a language bias in the
+# opposite direction from the measured Turkish one.
+_PRESENTATIVE_EN = (
+    # Presentative passive: "is presented", "was conducted", "were collected".
+    r"\b(?:is|are|was|were)\s+(?:\w+ly\s+)?"
+    r"(?:presented|conducted|collected|analysed|analyzed|performed|assessed|"
+    r"obtained|employed|used|reported|described|evaluated|carried\s+out|"
+    r"based\s+on\s+the\s+results)\b",
+    # Metadiscourse openers that name the document itself.
+    r"\bthis (?:paper|study|article|thesis|dissertation|work|section|chapter)\b",
+    r"\bin this (?:paper|study|article|thesis|section)\b",
+    r"\bthe (?:aim|goal|objective|purpose) of this (?:paper|study|article|thesis)\b",
+    r"\bthe aim of this study is to\b",
+    r"\bthis study (?:aims|seeks|investigates|examines|explores)\b",
+)
+#: Kobak vd.'s excess-vocabulary set (Science Advances 2025). Kept in one place so
+#: the provenance is auditable: >15M PubMed abstracts, 2010-2024, measured by
+#: word frequency shift rather than by a detector's opinion.
+_LLM_VOCABULARY_EN = (
+    # ``\w*`` at the end so inflected forms match too: "delve" alone would miss
+    # "delves", "delved" and "delving", which are the forms that actually appear
+    # in prose. The boundary is kept at the front so "understated" cannot match.
+    r"\b(?:delve|underscor|intricat|meticulous|pivot|realm|comprehensive|"
+    r"crucial|notabl|enhanc|exhibit|insight|additional)\w*\b",
+    # "across", "within", "particularly", "potential" are ordinary academic words
+    # on their own. They are in the measured set because of *frequency shift*, not
+    # because they are suspicious, so they sit in their own pattern and the rule
+    # caps at one hit rather than counting them like the marked vocabulary.
+    r"\b(?:potential|particularly|across|within)\b",
+)
+
+#: Thelwall & Kousha (2026), 1.25M science-wide full texts: LLMs actively avoid
+#: these. "thus" and "moreover" are high-frequency human academic connectives,
+#: so a deficit against the human baseline is positive evidence.
+_LLM_AVOIDED_EN = (
+    r"\b(?:thus|moreover|furthermore|henceforth)\b",
+)
+
 _HUMAN_MARKERS = (
     r"\b(?:^|\s)I\b",
     r"\bmy\b",
@@ -257,6 +299,42 @@ _CODEBOOK: tuple[Rule, ...] = (
         _PRESENTATIVE_TR,
         languages=("tr",),
         group="passive",
+    ),
+    _rule(
+        "presentative_passive",
+        0.15,
+        Severity.MEDIUM,
+        _PRESENTATIVE_EN,
+        languages=("en",),
+        group="passive",
+    ),
+    _rule(
+        "llm_vocabulary",
+        0.16,
+        Severity.MEDIUM,
+        # Kobak vd. excess-vocabulary set, measured on >15M PubMed abstracts
+        # (Science Advances 2025, DOI 10.1126/sciadv.adt3813). These are not
+        # style opinions: the single best of them, "potential", moves the
+        # measured prevalence estimate by 5.2 percentage points. Turkish has no
+        # published equivalent, which is one reason English mode can carry a
+        # lexicon signal and Turkish mode cannot.
+        _LLM_VOCABULARY_EN,
+        languages=("en",),
+        group="vocabulary",
+        max_hits=3,
+    ),
+    _rule(
+        "llm_avoided_connective",
+        0.12,
+        Severity.LOW,
+        # The inverse signal, and the more useful half. Thelwall & Kousha
+        # (arXiv:2604.07565, 1.25M full texts) measured that LLMs *avoid* these.
+        # They are high-frequency in human academic prose, so their relative
+        # absence is positive evidence - computable offline with no model.
+        _LLM_AVOIDED_EN,
+        languages=("en",),
+        group="discourse",
+        max_hits=2,
     ),
     _rule("meta_hedge", 0.08, Severity.LOW, _META_HEDGE, group="meta", max_hits=2),
     _rule("strong_positivity", 0.12, Severity.MEDIUM, _STRONG_POSITIVITY, group="emotion"),

@@ -916,6 +916,14 @@ def _render_context(report: DocumentReport, verdict: Text) -> None:
             "ROC-AUC 0.68 olduğu ölçülmüştür\n",
             style="dim",
         )
+    if report.english_context is not None:
+        style = report.english_context.style
+        verdict.append(
+            f"İngilizce referans · AI yaygınlığı arXiv CS %22.5 / matematik %7.7 "
+            f"(hata payı <3.5 puan) · insan MTLD {style['document_level']['mtld_mean']:.0f} "
+            f"(L2 A2 seviyesi {style['l2_reference']['a2_mtld']:.0f})\n",
+            style="dim",
+        )
 
 
 def _render_report(report: DocumentReport, *, level: RiskLevel, limit: int, show_all: bool) -> None:

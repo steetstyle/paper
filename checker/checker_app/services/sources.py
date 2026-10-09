@@ -20,7 +20,7 @@ from pathlib import Path
 
 from checker_app.config import CheckerSettings
 from checker_app.domain.models import SourceDocument
-from checker_app.domain.text import Token, tokenize
+from checker_app.domain.text import Token, language_confidence, tokenize
 from checker_app.logging import get_logger
 
 __all__ = ["SourceLoader", "LoadedDocument", "DEFAULT_EXTENSIONS", "looks_like_own_output"]
@@ -141,6 +141,7 @@ class SourceLoader:
             strip_diacritics=self._strip,
             normalize_digits=self._fold_digits,
         )
+        language, confidence = language_confidence(text)
         return SourceDocument(
             source_id=loaded.source_id(),
             name=_display_name(loaded.path),
@@ -149,6 +150,8 @@ class SourceLoader:
             tokens=tuple(tokens),
             page_count=text.count("\f") + 1,
             meta=dict(loaded.meta or {}),
+            language=language,
+            language_confidence=round(confidence, 3),
         )
 
     def to_sources(self, loaded: Iterable[LoadedDocument]) -> list[SourceDocument]:

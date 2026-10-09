@@ -22,6 +22,15 @@ yanlıştı (§1.14). Daha önemlisi, §1.13'teki ölçüm aracın tasarımını
 ve aynı içerik Fransızca'da %0, Türkçe çevirisinde %73.25 okundu. İkinci negatif
 — Türkçe **tez** benzerlik dağılımı — doğrulandı.
 
+**Dördüncü tur** İngilizce akademik ölçümlere yöneldi ve **tabanların 3 kat
+farklı olduğunu** gösterdi: Türkçe tezler %28.7 ± 11.58, temiz İngilizce
+doktora tezleri **%9 ± 6** (§1.19). Aynı turda İngilizce kurum eşikleri (§1.20),
+alan bazlı AI yaygınlığı (§1.21), model gerektirmeyen iki İngilizce sözlük sinyali
+(§1.22) ve tür/uzunluk/L2 uyarıları (§1.23) eklendi. Yayımlanmış İngilizce stil
+tablosu olmadığı için insan İngilizce akademik metin referansları **kendi
+ölçümümüzle** üretildi ve `PROVENANCE` alanında "kendi ölçüm" olarak işaretlendi
+(§1.24).
+
 ---
 
 ## 1. AI yazım tespiti
@@ -419,6 +428,139 @@ Türkçe için literatürde ölçüm olmadığı için `CHECKER_SCORE_RATIO_CENT
 varsayılanları **kendi ölçümümüzdür** (TR 0.33) ve `checker calibrate` ile kendi
 koleksiyonunuzda yeniden ölçülmelidir.
 
+### 1.19 İngilizce: taban Türkçe'nin üçte biri
+
+| Corpus | Ortalama | SD | Kaynak |
+|---|---|---|---|
+| Türkçe tezler (n=600, eğitim bilimleri) | %28.7 | 11.58 | Toprak 2014 |
+| **İngilizce doktora tezleri (n=360)** | **%9** | **6** | Mayes 2017 |
+| İngilizce makaleler (n=360, aynı alan) | %11 | 10 | aynı |
+
+İngilizce doktora tezlerinin yalnız **%2.2'si** %25 üstünde. Yüksek puanın tek
+anlamlı belirleyicileri **kaynakça sayısı ve kelime sayısı** (Nagelkerke
+R² = 0.169) — uzun bibliyografya puanı şişiriyor, yazıyla ilgisi olan bir şey
+değil. Referans listelerini dışarıda bırakmak puanları **anlamlı biçimde**
+değiştirdi.
+
+**Ölçülmüş eşik, politik tavan değildir:**
+
+| | Değer | Kanıt |
+|---|---|---|
+| **Ölçülmüş optimal eşik** | **%15** | duyarlılık **%84.8**, özgüllük **%80.5**, AUC **0.902** |
+| Kurumsal tavan | %25–30 | gözlenen normal değil, politik sınır |
+
+Higgins, Lin & Evans (2016), DOI 10.1186/s41073-016-0021-8: 400 el ile doğrulanmış
+manuskript, intihal **%25.8** (SD 9.9, n=66), temiz **%11.5** (SD 6.2, n=333).
+Yalnız özet/giriş/sonuç/tartışma: **%25.7** vs **%5.6**.
+
+> **Karar:** `EnglishBaseline` belge diline göre seçilir. `checker_similarity`
+> `applied_baseline` alanı hangisinin kullanıldığını açıkça bildirir.
+
+### 1.20 İngilizce kurum eşikleri ve eşiği reddeden kurumlar
+
+Her URL **çekilerek** doğrulandı:
+
+| Kurum | Kural |
+|---|---|
+| Virginia Tech, Graduate School | <%25 genel, tek kaynak <%5. **NOT:** aynı üniversitenin Honor System sayfası %15 de yayımlıyor — iki canlı sayfa çelişiyor, tek sayı olarak alıntılanmamalı |
+| East Anglia (UK) | hacme göre: <%5 düşük, %5-20 orta, >%20 yüksek |
+| Jinnah University (Pakistan, HEC) | toplam <%20, tek kaynak <%5; **kendi yayınları hariç** |
+| Charles Sturt (Avustralya) | "genel olarak %25 altı güvenilir sayılabilir"; kurumun kendi örneği: doğru alıntılanmış bir deneme **%30** çıktı, intihal **yoktu** |
+| Panjab University (Hindistan) | **bölüm bazlı**: giriş %30, literatür **%50**, yöntem %25, sonuç %10, tartışma %10, tam tez %20 |
+| Rhodes Üniversitesi | "öğretim üyesi benzerlik endeksi için kabul edilebilir yüzde belirleyemez... endeks intihal düzeyinin göstergesi değildir" |
+| Glasgow Caledonian | "intihalin başladığı ve bittiği bir kesim noktası yoktur"; en küçük eşik 3'e çekilirse puanın şiştiğini uyarıyor |
+| ANU | iThenticate raporu zorunlu, sayısal eşik yok |
+
+> **Karar:** Eşiği **reddeden** kurumlar boş satır değil, kendi gerekçeleriyle
+> raporlanır (`no_threshold_reason`) — "araştırdık ve bulamadık" değil, daha
+> güçlü ve alıntılanabilir bir konum. Bantlar belge diline göre filtrelenir.
+
+### 1.21 İngilizce AI yaygınlığı ve alan farkı
+
+| Venue | Özet | Giriş | Kasım 2022 |
+|---|---|---|---|
+| arXiv Bilgisayar | **%22.5** (21.7–23.3) | %19.6 | %2.4 |
+| arXiv Elektrik/Sistem | %18.0 | %18.4 | %2.9 |
+| **arXiv Matematik** | **%7.7** | **%4.1** | %2.5 |
+| Nature portföyü | %8.9 | %9.4 | %3.4 |
+
+1.121.912 makale; DOI 10.1038/s41562-025-02273-8. Tahmin yönteminin hata payı
+**<3.5 puan**. Bağımsız doğrulama: Kobak vd. PubMed 2024 için **≥%13.5**
+(DOI 10.1126/sciadv.adt3813); en iyi tek kelime 5.2 puan kaydırıyor. Bölüm
+**yönü** yayımlanmış (özet/giriş/ilgili çalışmalar/sonuç > yöntem/deney),
+sayıları UNVERIFIED. Beyan oranı: 200 incelenen makalenin **2'si** (%1.0). Hakem
+yorumlarında LLM: %6.5–16.9 (arXiv:2403.07183).
+
+> **Karar:** Matematik disiplininin **kendi önceliği** vardır (%7.7 / %4.1); CS
+> oranıyla okumak önseli ters çevirir. `EnglishAiPresence` alan tablosunu taşır.
+
+### 1.22 İngilizce sözlük sinyalleri (ölçülmüş, model gerektirmez)
+
+| Bulgu | Sayı | Kaynak |
+|---|---|---|
+| LLM ile ilişkili aşırı kelimeler | 291 kelimelik nadir set + 10 kelimelik yaygın set; en iyi tek kelime **5.2 puan** | DOI 10.1126/sciadv.adt3813 |
+| **LLM'ler `thus` ve `moreover`'dan kaçınıyor** | 1.25M tam metin (MDPI 2021–2025) | arXiv:2604.07565 |
+| Terim büyümesi 2022→2024 | "delve" **+%1.500**, "underscore" +%1.000, "intricate" +%700 | DOI 10.1007/s11192-026-05601-5 |
+
+> **Karar:** İki İngilizce sözlük kuralı eklendi (`llm_vocabulary`,
+> `llm_avoided_connective`). **Türkçede karşılığı yok** — yayımlanmış bir Türkçe
+> eşdeğer bulunmadığı için Türkçe modda bu kurallar **yok**. Asimetri kanıtın
+> kendisinden geliyor, keyfî değil; bir test bunu açıkça sabitler.
+
+### 1.23 İngilizce tür/uzunluk ve L2 uyarıları
+
+| Bulgu | Sayı | Kaynak |
+|---|---|---|
+| Dedektör doğruluğu **türe** göre | Turnitin: insanlık **0.86** → fen **0.51** | DOI 10.1007/s40979-026-00213-1 |
+| **Uzunluğa** göre | 300–330 kelime **0.87**; 450–550 **0.56** (χ²=8.41, p=.0149) | aynı |
+| L2 yanlış pozitif (7 dedektör, TOEFL-91) | ortalama **%61.4**; Originality.AI **%75.8**, Quil.org %74.7 | DOI 10.1016/j.patter.2023.100779 |
+| **Aynı veri setinde 2 yıl sonra** | **%23.1**; Çek non-native metininde entropi **yüksek** — yön tersine döndü | EACL 2026 SRW, DOI 10.18653/v1/2026.eacl-srw.20 |
+| CEFR etkisi (Binoculars) | A2 **0.948** → B2 0.951 → dil bilgisi yok **0.898** | arXiv:2502.12611 |
+| Doğrulanmış vakaların menşei | **%82'si** İngilizcenin resmî dil olmadığı ülkelerden | DOI 10.1186/s41073-016-0021-8 |
+| İnsan L2 yazarın leksik çeşitliliği | CEFR A2 MTLD **58.49** (SD 22.68), A1 45.53 — L1 akademik medyan 93.6'nın **altında** | Shatz vd. 2026 |
+
+> **Kararlar:** (1) `genre_and_length_note` her İngilizce raporla gelir: tek belge
+> puanı yanlıştır. (2) `l1_l2_note` aynı dosyada. (3) **`replication_note`
+> yönün değiştiğini yazar** — bu yüzden araç sabit bir yanlış pozitif oranı
+> varsayamaz, yalnız kendi korpusunu ölçebilir.
+
+### 1.24 İnsan İngilizce akademik metin referansları (kendi ölçümümüz)
+
+Yayımlanmış bir tablo bulunmadığı için **4.462 pre-ChatGPT arXiv özeti**
+(2015–2019, 742.788 token) ve **48 PMC OA tam metin** (113.928 token bölüm metni)
+üzerinde ölçüldü. `PROVENANCE` alanı bunu açıkça "araştırma turunun kendi
+ölçümü" diye işaretler; literatür değeri diye sunulmaz.
+
+| Ölçüm | Değer |
+|---|---|
+| Cümle uzunluğu | 24.87 ± 5.62 |
+| MTLD | 93.57 ± 31.87 |
+| Leksik yoğunluk | %64.18 ± 4.45 |
+| **Matematik MTLD** | **60.89** (diğer alanlar 94–102) |
+| Bölüm MTLD medyanı | giriş 90.7 · **sonuç 54.6** · tartışma 85.2 |
+| Bölüm cümle medyanı | giriş 27.3 · **yöntem 20.9** · sonuç 22.0 |
+
+> **Kararlar:** (1) **Sonuç bölümü kurgusal olarak tekrarlıdır** — MTLD 54.6,
+> tartışmanın 85.2'sinden düşük. Sonuçta düşük çeşitlilik zayıf kanıttır ve bu,
+> Liang vd.'in "yöntem/deney en az etkilidir" bulgusuyla bağımsız olarak
+> örtüşür. (2) **Matematik ayrı bir dildir** — İngilizce akademik metne göre
+> kurulmuş her eşik onu yanlış işaretler; alan koşullandırma şart. (3) Yöntem
+> bölümü en kısa cümlelere sahiptir ve `was/were/at/by` profili ayırt edicidir.
+
+### 1.25 Çapraz dil: dil çifti değil, **kayıt türü** belirler
+
+| Bulgu | Sayı | Kaynak |
+|---|---|---|
+| Wikipedia korpusunda çapraz dil | **%95.25 ± 1.76** | DOI 10.18653/v1/E17-2066 |
+| **Bilimsel konferans korpusunda (TALN)** | **%74.10 ± 1.29** | aynı |
+| PAN 2013'te tek çeviri adımı | PlagDet **11–15 puan** düşüş | CLEF 2013 |
+| Türkçe MKQA çapraz dil getirme | 25 dil ortalamasının **üstünde** (BGE-M3 69.6 vs 65.8) | arXiv:2407.19669 |
+| Yalnız-İngilizce gömme, TR bitext | all-MiniLM **37.02** vs multilingual-e5 **73.07** | DOI 10.18653/v1/2025.findings-emnlp.471 |
+
+> **Karar:** İngilizce akademik kaynak içinde tespit ~%74 bandında olmalıdır,
+> Wikipedia'ın %95'i değil. Doğrulama kümesi Wikipedia değil, bilimsel kayıt
+> olmalıdır.
+
 ---
 
 ## 2. İntihal
@@ -675,7 +817,7 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 | TR perplexity kalibrasyonu | insan medyan log10 ≈ 1.55, AI-benzeri ≈ 1.38 | `scripts/calibrate.py` |
 | EN perplexity kalibrasyonu | insan ≈ 1.69, AI-benzeri ≈ 1.39 | aynı |
 | Kod AST testleri | 12 | `tests/test_code_ast.py` |
-| Toplam test | 268, model indirmeden ~5 sn | `make test` |
+| Toplam test | 315, model indirmeden ~5 sn | `make test` |
 | MCP uçtan uca | 11 araç gerçek stdio istemcisiyle | `make mcp-test` |
 | Raporlama tabanı ölçümü (yalnız stilometri, modeller kapalı) | gerçekçi TR giriş metni AI payı **%0.0**; jenerik metin **%57.7** | `tests/test_mcp.py` |
 | Kalibrasyon koruması, gerçek korpusta | 9 örnek (6 insan + 3 AI cümle) → **ölçülmedi**, "olasılık olarak okunamaz" | `checker calibrate --human-dir … --machine-dir …` |

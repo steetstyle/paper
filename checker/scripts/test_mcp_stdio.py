@@ -44,7 +44,60 @@ eğitimi üç ayrı koşul altında titizlikle yürütülmüştür ve sonuçlar 
 """
 
 
-def fixtures() -> tuple[Path, Path]:
+#: An English thesis, to check that the language gate selects the English
+#: baseline and the English institutional bands. Clean English dissertations
+#: measure 9% +/- 6% against 28.7% for Turkish, so a mix-up shows in the payload.
+ENGLISH_THESIS = """# Abstract
+
+This study investigates how undergraduate students revise their writing when
+automated feedback is made available during drafting. The findings suggest that
+iterative feedback helps students revise more effectively, although the present
+study does not establish the underlying mechanism.
+
+# 1. INTRODUCTION
+
+Prior work has largely treated writing as a single-shot activity in which
+students compose text and then submit it for evaluation. We show that this
+approach understates the revision process substantially.
+
+# 2. METHOD
+
+Participants were recruited from two introductory writing courses and were
+randomly assigned to one of three conditions. Each session lasted ninety minutes
+and was recorded with written consent obtained beforehand.
+
+# 3. RESULTS
+
+The revision scores in the iterative-feedback condition were higher than those in
+the control condition, though the difference was modest and should be read with
+care.
+
+# 4. DISCUSSION
+
+The findings suggest that iterative feedback helps students revise more
+effectively, but the present study does not establish the mechanism involved.
+
+# REFERENCES
+
+Smith, J. (2019). Automated writing evaluation. Journal of Writing Research.
+"""
+
+
+#: A separate English reference. It cannot be the thesis itself: the loader drops
+#: a document from its own reference set, which would leave nothing to compare.
+ENGLISH_SOURCE = """# Reference
+
+Writing has often been treated as a single activity that ends when the text is
+submitted for evaluation, and this assumption has shaped instruction and
+assessment for decades.
+
+The revision scores in the iterative-feedback condition were higher than those
+in the control condition, though the difference was modest and should be read
+with care.
+"""
+
+
+def fixtures() -> tuple[Path, Path, Path, Path]:
     """Sample files, or the ones the user named. Sync: writing files inside the
     event loop would block the client transport."""
     if len(sys.argv) < 2:
@@ -52,19 +105,29 @@ def fixtures() -> tuple[Path, Path]:
         workdir.mkdir(parents=True, exist_ok=True)
         thesis = workdir / "tez.md"
         source = workdir / "kaynak.md"
+        english = workdir / "thesis-en.md"
+        english_source = workdir / "ref-en.md"
         thesis.write_text(THESIS, encoding="utf-8")
         source.write_text(SOURCE, encoding="utf-8")
-        print(f"örnek tez yazıldı: {thesis}")
-        return thesis, source
+        english.write_text(ENGLISH_THESIS, encoding="utf-8")
+        english_source.write_text(ENGLISH_SOURCE, encoding="utf-8")
+        print(f"örnek tez yazıldı: {thesis} (+ İngilizce örnek)")
+        return thesis, source, english, english_source
     thesis = Path(sys.argv[1]).resolve()
     source = (
         Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else thesis.parent / "kaynak.md"
     )
-    return thesis, source
+    english = thesis.parent / "thesis-en.md"
+    english_source = thesis.parent / "ref-en.md"
+    if not english.exists():
+        english.write_text(ENGLISH_THESIS, encoding="utf-8")
+    if not english_source.exists():
+        english_source.write_text(ENGLISH_SOURCE, encoding="utf-8")
+    return thesis, source, english, english_source
 
 
 async def main() -> int:
-    thesis, source = fixtures()
+    thesis, source, english, english_source = fixtures()
 
     params = StdioServerParameters(
         command=VENV_PYTHON,
@@ -221,6 +284,69 @@ async def main() -> int:
             )
             if not refs.get("caveats"):
                 failures.append("kaynakça denetimi kendi sınırlarını taşımıyor")
+
+        # English mode: the language gate must switch both the baseline and the
+        # institutional bands. A mix-up would apply Turkish thresholds to an
+        # English thesis, where the measured clean corpus is 3x lower.
+        english_scan = await call(
+            "checker_scan",
+            {
+                "path": str(english),
+                "profile": "thesis",
+                "use_ratio": False,
+                "use_perplexity": False,
+                "use_classifier": False,
+                "min_level": "none",
+                "top": 1,
+            },
+        )
+        context = english_scan.get("verdict", {}).get("english_context")
+        if not context:
+            failures.append("İngilizce belgede english_context yok")
+        else:
+            presence = context["ai_presence"]
+            print(
+                f"İngilizce: dil={english_scan.get('document', {}).get('language')} "
+                f"AI={presence['arxiv_cs_abstracts']} (CS) / "
+                f"{presence['arxiv_mathematics_abstracts']} (mat) · "
+                f"hata payı={presence['estimator_error_percentage_points']} puan"
+            )
+            for key, expected in (
+                ("arxiv_cs_abstracts", 0.225),
+                ("arxiv_mathematics_abstracts", 0.077),
+            ):
+                if presence[key] != expected:
+                    failures.append(f"İngilizce AI yaygınlığı yanlış: {key}")
+        print(
+            f"  tür/uzunluk: {'0.86' in (context or {}).get('genre_and_length_note', '')} · "
+            f"L2 tekrar: {'%82' in (context or {}).get('l1_l2_note', '')} · "
+            f"tekrar çalışması: {'23.1' in (context or {}).get('replication_note', '')}"
+        )
+
+        english_similarity = await call(
+            "checker_similarity", {"path": str(english), "refs": [str(english_source)]}
+        )
+        similarity_block = english_similarity.get("similarity", {})
+        if similarity_block.get("applied_baseline") != "english":
+            failures.append(
+                f"İngilizce belge Türkçe tabanı kullandı: "
+                f"{similarity_block.get('applied_baseline')}"
+            )
+        baseline = similarity_block.get("english_baseline") or {}
+        if baseline.get("mean_percent") != 9.0:
+            failures.append("İngilizce taban 9% olmalı")
+        if baseline.get("optimal_cutoff_percent") != 15.0:
+            failures.append("İngilizce ölçülmüş optimal eşik 15% olmalı")
+        band_names = " ".join(b["institution"] for b in similarity_block.get("institutional_bands", []))
+        print(
+            f"İngilizce benzerlik: taban=%{baseline.get('mean_percent')} "
+            f"optimal_eşik={baseline.get('optimal_cutoff_percent')} "
+            f"kurumlar={len(similarity_block.get('institutional_bands', []))}"
+        )
+        if "Virginia Tech" not in band_names:
+            failures.append("İngilizce kurum bantları uygulanmadı")
+        if "YTÜ" in band_names:
+            failures.append("Türkçe kurum bantları İngilizce belgeye sızdı")
 
         context = verdict.get("style_context", {})
         print(

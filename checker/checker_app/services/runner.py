@@ -40,6 +40,11 @@ from checker_app.services.attribution import (
 from checker_app.services.code_ast import CodeBlock, CodeCompareService
 from checker_app.services.detector import DetectorService
 from checker_app.services.discourse import discourse_profile
+from checker_app.services.english_baselines import (
+    EnglishAiPresence,
+    EnglishContext,
+    EnglishStyleReference,
+)
 from checker_app.services.integrity import check_integrity
 from checker_app.services.patchwork import PatchworkReport, build_patchwork_report
 from checker_app.services.perplexity import PerplexityService, SignalUnavailable
@@ -276,6 +281,8 @@ class ScanRunner:
                 min_match_words=self.settings.plagiarism.institutional_min_match_words,
                 exclude_references=self.settings.plagiarism.exclude_references,
                 include_quotes=self.settings.plagiarism.include_quotes,
+                source_languages={source.source_id: source.language for source in sources},
+                document_language=language,
             )
 
             # Quantity-sensitive companion to the percentage: how many distinct
@@ -292,6 +299,19 @@ class ScanRunner:
         scorer = Scorer(self.settings, language)
         scores = scorer.score(
             sentences, styles, perplexities, classifiers, plagiarism_stats, degraded, ratios
+        )
+
+        # English reference values, gated on the detected language: they are
+        # measured on English academic prose and would actively mislead on a
+        # Turkish thesis. Attached after scoring because the AI share only
+        # exists once the sentences are scored.
+        english_context = (
+            EnglishContext(
+                presence=EnglishAiPresence().to_dict(share=scores.ai_share),
+                style=EnglishStyleReference().to_dict(),
+            )
+            if language.startswith("en")
+            else None
         )
 
         return DocumentReport(
@@ -325,6 +345,7 @@ class ScanRunner:
             similarity=similarity,
             patchwork=patchwork,
             discourse=discourse,
+            english_context=english_context,
             style_stats=style_stats,
             references=reference_audit,
             integrity=integrity,

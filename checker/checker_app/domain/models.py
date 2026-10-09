@@ -117,6 +117,15 @@ class SourceDocument:
     tokens: tuple[Token, ...]
     page_count: int = 1
     meta: dict[str, Any] = field(default_factory=dict)
+    language: str = "unknown"
+    """Detected per source, not per scan. A Turkish thesis citing English
+    literature is the ordinary case, so the two must be told apart: reuse
+    detection across that boundary is measurably weaker (precision 80%
+    untranslated, 26.7% translated, 16.7% translated-then-paraphrased -
+    DOI 10.33806/ijaes1026), and a reader should know which matches came from
+    a same-language source."""
+
+    language_confidence: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +442,12 @@ class DocumentReport:
     """Structural audit of the reference list: which entries a committee should
     look up by hand, and the measured rates that make it worth doing."""
 
+    english_context: Any = None
+    """English-language reference values: measured AI prevalence, human style
+    baselines, and the genre/length calibration warnings. ``None`` on a Turkish
+    document, because these are measured on English academic prose and would
+    actively mislead there."""
+
     integrity: Any = None
     """Byte-level health of the document (homoglyphs, zero-width characters)."""
 
@@ -509,6 +524,9 @@ class DocumentReport:
             "discourse": self.discourse.to_dict() if self.discourse else None,
             "style_stats": self.style_stats.to_dict() if self.style_stats else None,
             "references": self.references.to_dict() if self.references else None,
+            "english_context": (
+                self.english_context.to_dict() if self.english_context else None
+            ),
             "integrity": self.integrity.to_dict() if self.integrity else None,
             "sources": [dict(s) for s in self.sources],
             "settings": self.settings,

@@ -251,6 +251,82 @@ yalnız bağlam verir.
 
 ---
 
+## İngilizce desteği
+
+İngilizce modu ayrı tablolarla gelir, çünkü **ölçülen tabanlar 3 kat farklıdır**.
+Türkçe tez tabanını İngilizce bir belgeye uygulamak, normal ve iyi kaynak gösterilmiş
+bir tezin büyük kısmını işaretlemek olurdu.
+
+| Corpus | Ortalama | SD | Kaynak |
+|---|---|---|---|
+| Türkçe tezler (n=600, eğitim bilimleri) | %28.7 | 11.58 | Toprak 2014 |
+| **İngilizce doktora tezleri (n=360)** | **%9** | **6** | Mayes 2017 |
+| İngilizce yayınlanmış makaleler (n=360) | %11 | 10 | aynı |
+
+İngilizce doktora tezlerinin yalnız **%2.2'si** %25'in üstünde. Aynı çalışmada
+yüksek puanın **tek anlamlı belirleyicileri kaynakça sayısı ve kelime sayısı**
+(Nagelkerke R² = 0.169) — uzun bibliyografya puanı şişiriyor, yazıyla ilgisi
+olan bir şey değil.
+
+**Ölçülmüş eşik ≠ politik tavan:**
+
+| | Değer | Kanıt |
+|---|---|---|
+| **Ölçülmüş optimal eşik** | **%15** | duyarlılık %84.8, özgüllük %80.5, AUC **0.902** (Higgins vd. 2016, 400 el yazımı doğrulanmış manuskript) |
+| Kurumsal tavan | %25–30 | bir **politik** sınırdır, gözlenen normal değil |
+
+Doğrulanmış intihal vakaları ortalama **%25.8** (SD 9.9), temiz olanlar **%11.5**
+(SD 6.2). Yalnız özet/giriş/sonuç/tartışma bölümlerine bakınca ayrım açılıyor:
+**25.7** vs **5.6**.
+
+### Alan farkı
+
+| Venue | Özet | Giriş | Kasım 2022 tabanı |
+|---|---|---|---|
+| arXiv Bilgisayar | **%22.5** | %19.6 | %2.4 |
+| arXiv Elektrik/Sistem | %18.0 | %18.4 | %2.9 |
+| **arXiv Matematik** | **%7.7** | **%4.1** | %2.5 |
+| Nature portföyü (15 dergi) | %8.9 | %9.4 | %3.4 |
+
+Matematik istisnadır ve girişleri özetlerinden **daha az** değiştirilmiştir.
+Tahmin yönteminin kendi hata payı **<3.5 puan** — her oran bu bantla okunmalı.
+
+Bağımsız doğrulama (farklı yöntem, farklı korpus): Kobak vd. (2025) PubMed
+özetleri için 2024'te **≥%13.5** tahmin ediyor; en iyi tek kelime ("potential")
+oranı **5.2 puan** kaydırıyor.
+
+Bölüm yönü yayımlanmış, sayıları değil: **özet, giriş, ilgili çalışmalar ve
+sonuç** bölümleri yöntem-deney bölümlerinden daha çok değiştirilmiştir.
+
+### İngilizce sözlük sinyalleri — ölçülmüş, çevrimdışı
+
+Türkçenin yayımlanmış karşılığı olmayan iki sözlük sinyali İngilizce'de var:
+
+- **Aşırı kelime seti** (Kobak vd., >15M PubMed özeti): `delve`, `underscore`,
+  `intricate`, `meticulous`, `pivotal`, `comprehensive`, `crucial`, `insights` …
+- **Ters sinyal, daha faydalı olan yarısı:** Thelwall & Kousha (1.25M tam metin)
+  LLM'lerin **`thus` ve `moreover`** kelimelerinden *kaçındığını* ölçtü. İkisi de
+  insan metninde yüksek sıklıkta bağlaç, dolayısıyla **eksikliği** pozitif
+  kanıttır — model gerektirmez.
+
+### Dil, lenf ve L2
+
+İngilizce taramada üç ölçülmüş uyarı rapora eklenir:
+
+- **Tür ve uzunluk:** Turnitin insanlıkta **0.86**, fen bilimlerinde **0.51**
+  (Hadra vd. 2026, p=.0149). Uzunluk: 300–330 kelimede **0.87**, 450–550'de
+  **0.56**. Tek belge puanı yanlış olur.
+- **L1/L2:** Doğrulanmış vakaların **%82'si** İngilizcenin resmî dil olmadığı
+  ülkelerden. Ana dilini İngilizce olmayan yazarın metni **insan yazımı olduğu
+  halde** L1 ölçüte göre leksik olarak fakir görünür: CEFR A2 seviyesinde MTLD
+  **58 ± 22**, L1 akademik medyan **94**.
+- **Tekrar çalışması:** Liang vd. (2023) L2 yanlış pozitif oranını **%61.4**
+  olarak raporladı; EACL 2026 aynı veri setinde **%23.1** buldu ve Çek
+  non-native metinlerinde entropinin **yüksek** olduğunu gördü — **yön bile
+  değişti**. Bu yüzden araç sabit bir yanlış pozitif oranı varsayamaz.
+
+---
+
 ## Tez profili
 
 `--profile thesis` (veya `similarity`/`compliance` komutları) şunları açıkça
@@ -448,6 +524,7 @@ checker/
 │   │   ├── discourse.py     RST ilişki bağlaç profili
 │   │   ├── reliability.py   ECE / Brier / güvenilirlik / sıcaklık
 │   │   ├── references.py    kaynakça yapısal denetimi
+│   │   ├── english_baselines.py  İngilizce ölçülmüş referanslar
 │   │   ├── calibration.py   yerel işletim noktası ölçümü
 │   │   ├── compliance.py    YÖK/kurumsal kontrol listesi
 │   │   ├── scoring.py       sinyal füzyonu, açıklamalar, bölüm toplamları
@@ -460,7 +537,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             272 test, model indirmeden
+├── tests/             315 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```
