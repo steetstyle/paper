@@ -561,6 +561,30 @@ Yayımlanmış bir tablo bulunmadığı için **4.462 pre-ChatGPT arXiv özeti**
 > Wikipedia'ın %95'i değil. Doğrulama kümesi Wikipedia değil, bilimsel kayıt
 > olmalıdır.
 
+### 2.1b Çapraz dil: çeviriyle gelen aktarımlar
+
+Kelime eşleştirmesi çevrilmiş bir aktarımı **%0** olarak raparlar; bu bir körlük
+noktasıdır. Ölçülen tavan:
+
+| Bulgu | Sayı | Kaynak |
+|---|---|---|
+| Kesinlik: çeviri yok / çeviri / çeviri+paraphrase | **%80** / **%26.7** / **%16.7** | DOI 10.33806/ijaes1026 |
+| PAN 2013 tek çeviri adımı | PlagDet **11–15 puan** düşüş | CLEF 2013 |
+| **Kayıt türü** tavanı belirliyor: Wikipedia / bilimsel konferans | **%95.25 ± 1.76** / **%74.10 ± 1.29** | DOI 10.18653/v1/E17-2066 |
+| TR bitext'te yalnız-İngilizce gömme | all-MiniLM **37.02** vs multilingual-e5 **73.07** | DOI 10.18653/v1/2025.findings-emnlp.471 |
+| TR kaynak → LLM rewrite leksikal örtüşme | TF-IDF kosinüs **0.531** (rewrite), 0.299 (completion) | DOI 10.28948/ngumuh.1930411 |
+
+> **Karar:** `services/crosslingual.py` — gömme yerine **çeviri dayanıklı çapa**.
+> Sayılar, ondalık hassasiyet, kimlikler, Latin alfabesi özel adlar, yazar–yıl
+> çiftleri. Küme koşulu: ≥3 çapa, **aynı sırada**, 90 token içinde, en az 2'si
+> sayı/kimlik. HyPlag'ın greedy tiling'i başka alfabeye uygulanmış hâli (MRR
+> 0.79 vs 0.58).
+>
+> **Abartmama:** bir kontrol metni de küme üretir (alan içinde tekrar eden
+> örneklem büyüklükleri). Bu yüzden `high | medium | review` dereceleri var ve
+> okuma metni "kanıt değil işarettir" diyor. Tavan (%74.10) ve "bulunamayan küme
+> hiçbir şey kanıtlamaz" uyarısı her raporla birlikte gider.
+
 ---
 
 ## 2. İntihal
@@ -817,7 +841,7 @@ likelihood-ratio sinyalidir (AUC 0.944, kendi ölçümümüz).
 | TR perplexity kalibrasyonu | insan medyan log10 ≈ 1.55, AI-benzeri ≈ 1.38 | `scripts/calibrate.py` |
 | EN perplexity kalibrasyonu | insan ≈ 1.69, AI-benzeri ≈ 1.39 | aynı |
 | Kod AST testleri | 12 | `tests/test_code_ast.py` |
-| Toplam test | 315, model indirmeden ~5 sn | `make test` |
+| Toplam test | 332, model indirmeden ~5 sn | `make test` |
 | MCP uçtan uca | 11 araç gerçek stdio istemcisiyle | `make mcp-test` |
 | Raporlama tabanı ölçümü (yalnız stilometri, modeller kapalı) | gerçekçi TR giriş metni AI payı **%0.0**; jenerik metin **%57.7** | `tests/test_mcp.py` |
 | Kalibrasyon koruması, gerçek korpusta | 9 örnek (6 insan + 3 AI cümle) → **ölçülmedi**, "olasılık olarak okunamaz" | `checker calibrate --human-dir … --machine-dir …` |

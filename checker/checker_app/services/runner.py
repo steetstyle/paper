@@ -38,6 +38,7 @@ from checker_app.services.attribution import (
     find_quotation_spans,
 )
 from checker_app.services.code_ast import CodeBlock, CodeCompareService
+from checker_app.services.crosslingual import CrossLingualReport, find_cross_lingual
 from checker_app.services.detector import DetectorService
 from checker_app.services.discourse import discourse_profile
 from checker_app.services.english_baselines import (
@@ -153,6 +154,7 @@ class ScanRunner:
         # evidence Adelphi's 2025 guidance asks for alongside a detector score.
         reference_audit = audit_references(sentences)
 
+
         # Headings, code, math and tables are located and reported but never
         # judged for authorship: a model score on "# Giriş" is noise, and it
         # would poison the document averages and the z-scores.
@@ -224,6 +226,7 @@ class ScanRunner:
         matches: list = []
         similarity: SimilarityReport | None = None
         patchwork: PatchworkReport | None = None
+        cross_lingual: CrossLingualReport | None = None
         if request.use_plagiarism and sources and segmentation.tokens:
             result = self.plagiarism.compare(sentences, segmentation.tokens, sources, text)
             matches.extend(result.matches)
@@ -296,6 +299,23 @@ class ScanRunner:
                 statuses=citation_status,
             )
 
+        # Cross-lingual reuse. A word-level matcher sees zero overlap between a
+        # Turkish passage and the English paper it was translated from, so this
+        # pass looks for what survives translation: numbers, decimal precision,
+        # identifiers and Latin-script proper nouns, in the same order on both
+        # sides. Only sources detected as a different language are considered.
+        cross_lingual = (
+            find_cross_lingual(
+                document_tokens=segmentation.tokens,
+                sources=sources,
+                document_language=language,
+                document_text=text,
+                lexical_matches=len(matches),
+            )
+            if sources
+            else None
+        )
+
         scorer = Scorer(self.settings, language)
         scores = scorer.score(
             sentences, styles, perplexities, classifiers, plagiarism_stats, degraded, ratios
@@ -348,6 +368,7 @@ class ScanRunner:
             english_context=english_context,
             style_stats=style_stats,
             references=reference_audit,
+            cross_lingual=cross_lingual,
             integrity=integrity,
             sources=tuple(
                 {

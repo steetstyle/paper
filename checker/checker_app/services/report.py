@@ -201,6 +201,22 @@ def _similarity_block(report: DocumentReport) -> str:
     if coverage is not None:
         lines.append(f"\n**Dil kapsamı:** {coverage.reading()}")
         lines.append(f"\n> {coverage.evidence}")
+    cross_lingual = report.cross_lingual
+    if cross_lingual is not None:
+        payload = cross_lingual.to_dict()
+        lines.append(
+            f"\n**Çapraz dil aktarımı:** {payload['clusters_found']} küme "
+            f"(yüksek {payload['confidence_counts']['high']}, "
+            f"orta {payload['confidence_counts']['medium']}, "
+            f"gözden geçir {payload['confidence_counts']['review']})"
+        )
+        for cluster in payload["clusters"][:10]:
+            lines.append(
+                f"  - [{cluster['confidence']}] {cluster['source']}: "
+                + ", ".join(cluster["anchors"])
+            )
+        lines.append(f"\n{cross_lingual.reading()}")
+        lines.append(f"\n> {cross_lingual.evidence}\n> {cross_lingual.caveat}")
     presence = report_similarity.ai_presence
     lines.append(f"\n{presence.to_dict()['reading']}")
     lines.append("\n| Kurum | Eşikler | Durum |")

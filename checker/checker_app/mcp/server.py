@@ -608,6 +608,22 @@ def checker_similarity(
     # Flatten the headline percentages: a caller should not need to know how
     # ``SimilarityReport.to_dict`` nests them.
     payload.update(payload.pop("similarity", {}))
+    # Lives on the document report, not on SimilarityReport: it needs the token
+    # stream and the detected source languages, which the percentage does not.
+    payload["cross_lingual"] = (
+        report.cross_lingual.to_dict() if report.cross_lingual else None
+    )
+    cross_lingual = payload.get("cross_lingual")
+    if cross_lingual and cross_lingual.get("clusters_found"):
+        counts = cross_lingual.get("confidence_counts", {})
+        payload["cross_lingual_note"] = (
+            f"Kelime eşleştirmesi bu aktarımı göremedi "
+            f"(benzerlik {payload.get('incl_quotes_percent', 0)}%). "
+            f"Çap kümeleri: {counts.get('high', 0)} yüksek, "
+            f"{counts.get('medium', 0)} orta, {counts.get('review', 0)} gözden geçir. "
+            "'review' seviyesi yalnızca sayılardan oluşan kısa kümelerdir ve alan "
+            "içinde tekrar eden örneklem büyüklüklerinden kaynaklanabilir."
+        )
     coverage = payload.get("language_coverage")
     if coverage and coverage.get("cross_language_sources"):
         # Say it here rather than letting a zero be read as "no overlap": with

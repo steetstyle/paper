@@ -442,6 +442,13 @@ class DocumentReport:
     """Structural audit of the reference list: which entries a committee should
     look up by hand, and the measured rates that make it worth doing."""
 
+    cross_lingual: Any = None
+    """Translation-resistant reuse clusters across language boundaries.
+
+    Exists because the word-level matcher reports a translated passage as "0%
+    overlap, clean", which is the worst possible answer: it reads as exonerating
+    evidence when it is actually a blind spot."""
+
     english_context: Any = None
     """English-language reference values: measured AI prevalence, human style
     baselines, and the genre/length calibration warnings. ``None`` on a Turkish
@@ -524,6 +531,9 @@ class DocumentReport:
             "discourse": self.discourse.to_dict() if self.discourse else None,
             "style_stats": self.style_stats.to_dict() if self.style_stats else None,
             "references": self.references.to_dict() if self.references else None,
+            "cross_lingual": (
+                self.cross_lingual.to_dict() if self.cross_lingual else None
+            ),
             "english_context": (
                 self.english_context.to_dict() if self.english_context else None
             ),

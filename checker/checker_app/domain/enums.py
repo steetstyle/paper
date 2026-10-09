@@ -106,6 +106,27 @@ class MatchKind(StrEnum):
     MATH = "math"
     """LaTeX/math block matched after normalisation."""
 
+    CROSS_LINGUAL = "cross_lingual"
+    """Reuse found only through translation-resistant anchors.
+
+    Not the same claim as :attr:`EXACT`. A lexical matcher sees zero overlap
+    between a Turkish passage and its English original, which the report would
+    otherwise render as "0% overlap, clean". What survives translation is the
+    skeleton: numbers, decimal precision, Latin-script proper nouns, identifiers
+    and the author-year pairs. A *cluster* of those, in the same order in both
+    texts, is evidence of reuse that the word-level matcher structurally cannot
+    see.
+
+    The honest ceiling: cross-lingual recoverability is set by the *register* of
+    the source, not the language pair - 95.25% on Wikipedia against 74.10% on a
+    scientific-conference corpus (DOI 10.18653/v1/E17-2066), and a single
+    translation step costs 11-15 PlagDet points on PAN 2013. A cross-lingual hit
+    is a flag requiring manual verification, not proof; a cross-lingual miss is
+    not evidence of absence. Both halves travel in the payload, along with a
+    confidence level, because a cluster built only from recurring sample sizes and
+    thresholds can occur by coincidence.
+    """
+
     @property
     def base_confidence(self) -> float:
         return _MATCH_CONFIDENCE[self]

@@ -238,6 +238,56 @@ puanlar olasılık olarak okunamaz.
 Kalibrasyon **ayrımdan ayrıdır**: mükemmel bir AUC, 0.62'nin "%62 olasılık"
 okunabileceği anlamına gelmez.
 
+## Çapraz dil: çeviriyle gelen aktarımlar
+
+Kelime eşleştirmesi, çevrilmiş bir aktarımı **%0 benzerlik** olarak raporlar.
+Bu en kötü cevaptır: temize çeviriliyor gibi görünür ama aslında bir körlük
+noktasıdır. Ölçülen: çeviri yokken kesinlik **%80**, çeviride **%26.7**,
+çeviri+paraphrase'ta **%16.7** (DOI 10.33806/ijaes1026); PAN 2013'te tek çeviri
+adımı PlagDet'i **11–15 puan** düşürüyor.
+
+Çözüm gömme değil, **çevirinin bıraktıkları**:
+
+| Çapa | Neden dayanıklı |
+|---|---|
+| Sayılar | örneklem büyüklüğü, eşik, katsayı — 412, 0.80, 23 aynı kalır |
+| Ondalık hassasiyet | 0.80 ile 0.8 farklı çapadır |
+| Kimlikler | DOI, arXiv kimliği, ölçek adları |
+| **Latin alfabesi özel adlar** | Türkçe metin yabancı soyadını çevirmez: Smith, Cohen, Kaufman |
+| Yazar–yıl çiftleri | Smith (2019), Cohen (1988) |
+
+Tek çapa tesadüftür; **küme** kanıttır: en az 3 farklı çapa, her iki metinde de
+**aynı sırada**, 90 tokenlık pencere içinde, ve bunların en az 2'si sayı ya da
+kimlik olmalı. Sıra şartı iki ilgisiz cümlenin aynı sayıları taşımasını engeller.
+
+Bu, HyPlag'ın greedy tiling fikrinin başka bir alfabeye uygulanışıdır: sırayla
+gelen yeniden kullanılmış *birimleri* say, ortak kelimeleri değil — ki MRR'ı
+sırasız ölçüme karşı **0.79'a 0.58** çıkaran yapı budur.
+
+**Neden gömme yok:** İngilizce-only modeller Türkçede felaket — TR bitext'te
+all-MiniLM **37.02**, multilingual-e5 **73.07** (TR-MTEB); 0.6–1.1 GB'lik ikinci
+bir model ise her cümle için ücret demek. Ayrıca çeviri gömmenin dayandığı şeyi
+yok ediyor: Kobak vd. Türkçe kaynak ile LLM yeniden yazımı arasındaki TF-IDF
+kosinüsünü **0.531** (rewrite), **0.299** (completion) ölçtü.
+
+### Küme güven dereceleri — abartmamak için
+
+Bir **kontrol** metni de küme üretir: tesadüfen "412 katılımcı, 2019, Cohen
+(1988), 0.80" içeren, ilgisiz bir Türkçe metin. Alan içinde örneklem
+büyüklükleri ve eşikler tekrarlanır, bu yüzden yalnız sayılardan oluşan kısa bir
+küme tesadüfen oluşabilir. Bu yüzden:
+
+| Seviye | Koşul |
+|---|---|
+| `high` | ≥6 çapa **ve** en az bir özel ad ya da DOI |
+| `medium` | ≥6 çapa, ya da özel ad içeren daha küçük küme |
+| `review` | yalnız sayılardan oluşan kısa küme — tek başına anlamsız |
+
+Okuma metni **"kanıt değil işarettir"** der ve elle doğrulama ister. Ölçülen
+tavan raporla birlikte gider: Wikipedia'da %95.25, **bilimsel konferans
+korpusunda %74.10** (DOI 10.18653/v1/E17-2066). Yani bulunan küme doğrulamayı
+gerektiren bir işarettir; **bulunamayan küme hiçbir şey kanıtlamaz.**
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -522,6 +572,7 @@ checker/
 │   │   ├── code_ast.py      Python AST + LaTeX normalizasyonu
 │   │   ├── patchwork.py     yamalama biçimi (HyPlag GIT) + şans tabanı
 │   │   ├── discourse.py     RST ilişki bağlaç profili
+│   │   ├── crosslingual.py  çeviri dayanıklı çapa kümeleme
 │   │   ├── reliability.py   ECE / Brier / güvenilirlik / sıcaklık
 │   │   ├── references.py    kaynakça yapısal denetimi
 │   │   ├── english_baselines.py  İngilizce ölçülmüş referanslar
@@ -537,7 +588,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             315 test, model indirmeden
+├── tests/             332 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

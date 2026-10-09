@@ -97,6 +97,29 @@ with care.
 """
 
 
+#: An English source whose numbers and proper nouns survive translation, and the
+#: Turkish translation of it. The word matcher sees nothing between them; the
+#: anchor pass is the only thing that can.
+ENGLISH_CITED = """# Methods (English)
+
+Participants were recruited from two introductory writing courses and 412
+students completed the full protocol. Cohen (1988) reports an inter-rater
+agreement of 0.80 as the minimum acceptable value. Data collection ran between
+2019 and 2021 and produced 23 usable response sets after 7 exclusions. The
+instrument was scored using the rubric published by Kaufman and Smith (2019).
+"""
+
+TURKISH_TRANSLATION = """# YÖNTEM
+
+Katılımcılar iki temel yazma dersinden ve 412 öğrenciden toplandı ve
+protokolün tamamını tamamladı. Cohen (1988), kabul edilebilir en düşük
+değer olarak 0.80 aralıklar arası uyum raporlamaktadır. Veri toplama 2019 ile
+2021 arasında yürütülmüş ve 7 çıkarım sonrası 23 kullanılabilir yanıt seti
+üretilmiştir. Ölçek, Kaufman ve Smith (2019) tarafından yayımlanan rubrik
+kullanılarak puanlanmıştır.
+"""
+
+
 def fixtures() -> tuple[Path, Path, Path, Path]:
     """Sample files, or the ones the user named. Sync: writing files inside the
     event loop would block the client transport."""
@@ -111,6 +134,8 @@ def fixtures() -> tuple[Path, Path, Path, Path]:
         source.write_text(SOURCE, encoding="utf-8")
         english.write_text(ENGLISH_THESIS, encoding="utf-8")
         english_source.write_text(ENGLISH_SOURCE, encoding="utf-8")
+        (workdir / "cited-en.md").write_text(ENGLISH_CITED, encoding="utf-8")
+        (workdir / "tr-translation.md").write_text(TURKISH_TRANSLATION, encoding="utf-8")
         print(f"örnek tez yazıldı: {thesis} (+ İngilizce örnek)")
         return thesis, source, english, english_source
     thesis = Path(sys.argv[1]).resolve()
@@ -123,6 +148,8 @@ def fixtures() -> tuple[Path, Path, Path, Path]:
         english.write_text(ENGLISH_THESIS, encoding="utf-8")
     if not english_source.exists():
         english_source.write_text(ENGLISH_SOURCE, encoding="utf-8")
+        (workdir / "cited-en.md").write_text(ENGLISH_CITED, encoding="utf-8")
+        (workdir / "tr-translation.md").write_text(TURKISH_TRANSLATION, encoding="utf-8")
     return thesis, source, english, english_source
 
 
@@ -380,6 +407,32 @@ async def main() -> int:
         ):
             if needle not in turkish:
                 failures.append(f"TR FPR kanıtı eksik: {label}")
+
+        # The blind spot this closes: a translated passage reports 0% overlap
+        # under word matching, and the anchor pass is what finds it.
+        cited_en = thesis.parent / "cited-en.md"
+        tr_translation = thesis.parent / "tr-translation.md"
+        translation = await call(
+            "checker_similarity", {"path": str(tr_translation), "refs": [str(cited_en)]}
+        )
+        block = translation.get("similarity", {})
+        lexical = block.get("incl_quotes_percent")
+        cross = block.get("cross_lingual") or {}
+        print(
+            f"çeviri: kelime eşleşmesi={lexical}% · "
+            f"çap kümeleri={cross.get('clusters_found')} · "
+            f"güven={cross.get('confidence_counts')}"
+        )
+        if not cross.get("clusters_found"):
+            failures.append("çevrilmiş bir aktarım çapa geçişiyle bulunamadı")
+        counts = cross.get("confidence_counts", {})
+        if counts.get("review", 0) == cross.get("clusters_found"):
+            failures.append("çeviri bulgusu yalnız 'review' seviyesinde kalmamalı")
+        # The ceiling has to travel with it, or the zero reads as exoneration.
+        if "%74.10" not in (cross.get("evidence") or ""):
+            failures.append("çapraz dil tavanı (%74.10) raporla birlikte gitmiyor")
+        if "ALT SINIRDIR" not in (cross.get("caveat") or ""):
+            failures.append("çapraz dil alt sınır uyarısı eksik")
 
     print()
     if failures:
