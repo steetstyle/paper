@@ -473,6 +473,62 @@ numarasından sonra ise sayı ya da hiçbir şey gelir.
 Sonuç: astrofizik tezinde yanlış yıl **14 → 1**, yoğunlaştırılmış madde tezinde
 **263 → 63**, `review` sayısı **344 → 158**.
 
+### Dördüncü tur: iki tez, iki şablon ailesi
+
+**1706.08318** (Barselona, kuantum bilgi — **Katalanca/Fransızca/İngilizce** karışımı,
+Roma rakamlı bölümler) ve **2203.03469** (veritabanı, 220 sayfa — **harf aralıklı**
+başlıklar). Yedi tezin tamamı:
+
+| tez | alan | sayfa | sözcük | bölüm | kaynakça cümlesi |
+|---|---|---:|---:|---:|---:|
+| 1407.6566 | Astrofizik | 155 | 60.238 | 85 | 112 |
+| 2306.14650 | YZ (FR/TR) | 153 | 42.094 | 56 | 770 |
+| 1911.03731 | ML | 120 | 45.889 | 72 | 60 |
+| 0911.2782 | String kuramı | 153 | 52.620 | 96 | 561 |
+| 1912.04141 | Yoğunlaştırılmış madde | 192 | 78.422 | 91 | 930 |
+| 1706.08318 | Kuantum bilgi (3 dil) | 187 | 57.481 | 132 | 418 |
+| 2203.03469 | Veritabanı / SQL | 220 | 79.385 | 27 | 2.302 |
+
+#### 48.7pt'lik bir filigran, başlıktan büyük
+
+Bu tezin şablonunda sayfa başına bir-iki kez **48.7pt**lik süsleme harfleri var
+(`S`, `T`, `F`). Numaralandırmada her gerçek başlıktan **büyük** oldukları için
+en üst düzey bölümlere terfi ediyorlardı — 41 başlıktan 15'i sahteydi. Tek karakter
+asla başlık değildir.
+
+#### Harf aralıklı başlıklar
+
+Bölüm başlıkları `I N T R O D U C T I O N` biçiminde — harf aralığı, içerik
+akışında **gerçek boşluk** olarak duruyor. Bu iki şeye birden zarar veriyordu:
+başlık metni okunmuyordu ve `1I` bitişik olduğu için numaralandırma kuralı da
+göremiyordu.
+
+Kritik bulgu: bu tezin kaynakça başlığı **`B I B L I O G R A P H Y`** ve
+**gövde puntosunda**. Yani harf aralığı hem onu, hem gövde punto eşiğini
+geçirdi. Sonuç: 220 sayfalık tezin **567 kayıtlık** kaynakçası **hiç** bulunamadı.
+Anahtar kelime artık eşleştirme için birleştirilmiş metin üzerinden soruluyor ve
+tek kelime olan başlıklar temiz formuyla yayımlanıyor.
+
+**Ama çok kelimeli harf aralıklı başlıklar birleştirilmiyor.** pypdf karakter
+başına değil **run başına** x konumu veriyor, yani boşluk genişlikleri kurtarılamıyor
+ve kelime sınırları gerçekten kaybolmuş:
+`I N T R O D U C T I O N A N D B A C K G R O U N D` üç kelime mi bir mi belirsiz.
+Birleştirmek `INTRODUCTIONANDBACKGROUND` gibi **uydurulmuş** bir kelime üretir —
+gizlediği artefaktten daha kötü. Görünür artefakt dürüsttür; yalnız numaralandırma
+kuralı, `1I` yerine `1 I` görmek için birleştirilmiş formu kullanır.
+
+Türkçe harfler de kapsama alındı: `K A Y N A K Ç A` de aynı artefakttır.
+
+### Kalan sınırlar (ölçülmüş, gizlenmiyor)
+
+- **2203.03469'da `Part I` / `Part II` bölüm başlıkları bulunamıyor** — 12pt'te
+  ama takip eden harf aralıklı satırla aynı punto olduğu için tek bloğa giriyor.
+  Tezin bölüm yapısı bu yüzden kısmi (27 bölüm).
+- **Bir liste sayfasındaki girdiler başlık sanılıyor** (`BR E L I B R A R Y`,
+  `CC F G R U L E S`) — sayı ya da noktalama eşleşmesi olmayan, puntoyla
+  başlık ölçüsündeki liste satırları. Bunlar `review` olarak **işaretlenmiyor**,
+  yalnızca bölüm tablosunda görünüyor.
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -773,7 +829,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             389 test, model indirmeden
+├── tests/             393 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

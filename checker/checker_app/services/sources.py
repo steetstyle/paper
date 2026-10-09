@@ -269,6 +269,50 @@ _PDF_NON_PROSE_RATIO = 0.45
 #: top-level section and swallowed every following heading as its children.
 PDF_HEADING_MAX_CHARS = 120
 
+#: A heading is at least three characters long. Measured on arXiv:2203.03469, a
+#: 219-page computer-science thesis whose template carries a 48.7pt decorative
+#: initial: the letters "S", "T" and "F" appeared once or twice per page, ranked
+#: above every real heading because they were the largest type on the page, and
+#: were promoted to top-level sections. One character is never a heading.
+PDF_HEADING_MIN_CHARS = 3
+
+#: Tracked type: "I N T R O D U C T I O N" is one word that a PDF extractor hands
+#: back letter-spaced, because that is what the tracking looks like in the content
+#: stream. Measured on arXiv:2203.03469, every chapter heading of that 219-page
+#: thesis arrives this way, which left them unreadable in every report and - since
+#: "1I" is glued rather than "1 I" - invisible to the numbering rule that sets
+#: their level.
+#:
+#: Only a run of four or more single capitals separated by spaces is joined.
+#: That is a tracking artefact in any heading; it is not something prose does.
+#:
+#: Applied to level detection only, never to the reported title. The spaces are
+#: literal characters in the content stream, and pypdf reports one x position per
+#: run rather than per character, so the width of the gaps cannot be recovered and
+#: the word boundaries are genuinely gone: "I N T R O D U C T I O N A N D B A C K
+#: G R O U N D" is three words or one, and joining it blindly invents
+#: "INTRODUCTIONANDBACKGROUND". A visible artefact is more honest than an invented
+#: word, so the title is reported as extracted and only the numbering rule - which
+#: needs "1 Introduction" rather than a glued "1I" - sees the joined form.
+#: Uppercase letters for tracking detection, Turkish included: "K A Y N A K Ç A" is
+#: the same artefact as "B I B L I O G R A P H Y", and leaving Ç out would split
+#: the run in half on a Turkish thesis heading.
+_TRACKED_UPPER = "A-ZÇĞİÖŞÜ"
+_TRACKED_RUN_RE = re.compile(
+    rf"(?<![A-Za-zÇĞİÖŞÜçğıöşü])([{_TRACKED_UPPER}](?:[ \t]+[{_TRACKED_UPPER}]){{3,}})"
+)
+
+
+def _untrack(text: str) -> str:
+    """Rejoin letter-spaced (tracked) type, for matching only."""
+    return _TRACKED_RUN_RE.sub(
+        lambda match: (
+            " " if match.string[match.start() - 1 : match.start()].isdigit() else ""
+        )
+        + re.sub(r"[ \t]+", "", match.group(1)),
+        text,
+    )
+
 #: A bare number on its own line is a page footer.
 _PDF_FOOTER_RE = re.compile(r"^\d{1,4}$")
 
@@ -317,7 +361,7 @@ def _pdf_heading_level(
     at the same point size still means two levels, which a size-only reading would
     collapse.
     """
-    stripped = text.strip()
+    stripped = _untrack(text.strip())
     if not stripped:
         return 0
     if _PDF_STANDALONE_KEYWORD_RE.match(" ".join(stripped.split())):
@@ -335,6 +379,8 @@ def _pdf_heading_level(
     if font_size <= body_size + PDF_BODY_SIZE_TOLERANCE:
         return 0
     if len(stripped) > PDF_HEADING_MAX_CHARS:
+        return 0
+    if len(stripped) < PDF_HEADING_MIN_CHARS:
         return 0
     if _PDF_CAPTION_RE.match(stripped):
         return 0
@@ -489,8 +535,20 @@ def _mark_pdf_headings(
         # candidate, and the whole bibliography went unexamined - the one part of
         # a thesis that most needs auditing.
         level = 0
-        if _PDF_STANDALONE_KEYWORD_RE.match(" ".join(block.strip().split())):
-            level = 1
+        title = block.strip()
+        untracked = " ".join(_untrack(title).split())
+        if _PDF_STANDALONE_KEYWORD_RE.match(untracked):
+            # Tracked type is how some templates set it: arXiv:2203.03469 sets
+            # its bibliography heading as "B I B L I O G R A P H Y" at body size,
+            # which failed the size test, the keyword test and the section-role
+            # lookup, so a 219-page thesis reported no bibliography at all.
+            #
+            # The joined form is emitted rather than matched and thrown away,
+            # which is the opposite of the general rule for tracked type and
+            # deliberately so: a single word with no interior word boundary has
+            # nothing to invent, and the section-role classifier needs the plain
+            # form to see it at all.
+            level, title = 1, untracked
         elif candidate:
             level = _pdf_heading_level(block, size, body_size, size_rank)
         if level:
@@ -504,7 +562,7 @@ def _mark_pdf_headings(
             # the section path never advanced past the previous chapter.
             if out and out[-1].strip():
                 out.append("")
-            out.append(f"{'#' * level} {block.strip()}")
+            out.append(f"{'#' * level} {title}")
             out.append("")
             continue
         out.append(block)

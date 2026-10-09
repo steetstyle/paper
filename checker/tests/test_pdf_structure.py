@@ -251,6 +251,66 @@ def test_the_keyword_fallback_covers_both_languages() -> None:
         assert _heading_lines(runs) == [f"# {keyword}"], keyword
 
 
+# ------------------------------------------------------------------- tracking
+def test_a_decorative_initial_is_not_a_heading() -> None:
+    """A 48.7pt template ornament, ranked above every real heading by size.
+
+    Measured on arXiv:2203.03469, a 219-page thesis whose template carries a
+    large decorative initial: the letters "S", "T" and "F" appeared once or twice
+    per page and became top-level sections. One character is never a heading.
+    """
+    runs = [("S", 48.7), ("\n", BODY), ("Body text of the abstract.\n", BODY)]
+    assert _heading_lines(runs) == []
+    assert _pdf_heading_level("S", 48.7, BODY, {48.7: 1, 14.0: 2}) == 0
+
+
+def test_a_tracked_bibliography_heading_is_rejoined_for_the_role_lookup() -> None:
+    """Tracked type is how some templates set it.
+
+    "B I B L I O G R A P H Y" at body size failed the size test, the keyword test
+    and the section-role lookup, so a 219-page thesis reported no bibliography at
+    all - zero sentences, where the bibliography holds 567 entries.
+    """
+    runs = [
+        ("Body text before.\n", BODY),
+        ("B I B L I O G R A P H Y", BODY),
+        ("\n", BODY),
+        ("[Abadi et al. 2013] Daniel Abadi, Peter Boncz, Foundations.\n", BODY),
+    ]
+    marked = _mark(runs)
+    assert "# BIBLIOGRAPHY" in marked, "harf aralıklı başlık birleştirilmedi"
+    assert "B I B L I O" not in marked
+
+
+def test_a_tracked_multi_word_heading_is_left_readable() -> None:
+    """Word boundaries in tracked type are genuinely gone, and are not invented.
+
+    pypdf reports one x position per run rather than per character, so the width
+    of the gaps cannot be recovered: "I N T R O D U C T I O N A N D B A" is three
+    words or one. Joining it blindly produces "INTRODUCTIONANDBASICS", which is a
+    fabricated word - worse than the artefact it hides.
+    """
+    from checker_app.services.sources import _untrack
+
+    assert _untrack("I N T R O D U C T I O N") == "INTRODUCTION"
+    assert _untrack("1I N T R O D U C T I O N") == "1 INTRODUCTION"
+    # Short runs are ordinary text and must survive untouched.
+    assert _untrack("A B C") == "A B C"
+    assert _untrack("SQL and NoSQL queries") == "SQL and NoSQL queries"
+
+
+def test_the_role_lookup_sees_a_rejoined_keyword_but_the_report_does_not() -> None:
+    """Both halves matter: the classifier needs it plain, the reader needs it true."""
+    from checker_app.services.sources import _PDF_STANDALONE_KEYWORD_RE, _untrack
+
+    spaced = "B I B L I O G R A P H Y"
+    assert not _PDF_STANDALONE_KEYWORD_RE.match(spaced)
+    assert _PDF_STANDALONE_KEYWORD_RE.match(_untrack(spaced))
+    for spaced_form in ("R E F E R E N C E S", "K A Y N A K Ç A", "B I B L I O G R A P H Y"):
+        joined = _untrack(spaced_form)
+        assert _PDF_STANDALONE_KEYWORD_RE.match(joined), spaced_form
+
+
 # ------------------------------------------------------------------- footers
 def test_a_bare_page_number_is_dropped() -> None:
     """A footer is a bare number, and it is load-bearing too.
