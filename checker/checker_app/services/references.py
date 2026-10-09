@@ -102,12 +102,48 @@ _ARXIV_RE = re.compile(r"arxiv[:\s/]*(\d{2})(0[1-9]|1[0-2])[.\-]?(\d{4,5})", re.
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:a-z0-9<>+]+", re.I)
 _DOI_LOOSE_RE = re.compile(r"\bdoi[:\s]*", re.I)
 _URL_RE = re.compile(r"https?://\S+|\bwww\.\S+", re.I)
+
+#: A persistent identifier is not a date. "10.1103/PhysRevB.77.220503" contains
+#: the four-digit run "1103", and a bare-number fallback reads it as a year from
+#: the seventeenth century. Measured on arXiv:1912.04141: 263 of 417 entries
+#: carried a year taken out of a DOI or an ISBN. Identifiers are removed before
+#: any year is looked for, which is also what a human does.
+_IDENTIFIER_RE = re.compile(
+    r"(?:https?://|www\.)\S+|\bdoi[:\s/]*\S+|\bISBN\b[\s:]*[\d\-Xx]+"
+    r"|\barxiv[:\s/]*\S+|\b10\.\d{4,9}/\S+",
+    re.IGNORECASE,
+)
 _YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\b")
 
 #: A four-digit number followed by a comma sits in the author/venue gap, which is
 #: where the publication year goes. Page numbers are followed by spaces or by
 #: further back-references, not by a comma.
-_AUTHOR_YEAR_RE = re.compile(r"\b(1[0-9]{3}|20[0-9]{2})\s*,")
+#: A year, in the position a publication year actually occupies.
+#:
+#: Measured across three bibliography styles, and the two conflict:
+#: "Author, 1958, ApJS, 3, 211" puts it *first*, while "Adv. Theor. Math. Phys.,
+#: vol. 3, pp. 1415-1443, 1999, hep-th/9811131" puts it *last*. Taking the first
+#: comma-terminated number reads the volume (167, 172, 189); taking the last reads
+#: a page inside the range.
+#:
+#: What separates them is what follows the comma. The publication year is
+#: followed by the venue - a name, or an arXiv id - and a volume or page number is
+#: followed by another number or by nothing. So: four digits, a comma, then a
+#: letter, with no dash anywhere near it.
+_AUTHOR_YEAR_RE = re.compile(
+    r"(?<![\d‐-―−–—])((?:1[5-9]\d{2}|20[0-2]\d))\s*,\s*[A-Za-z]",
+    re.UNICODE,
+)
+
+#: The APA shape: "Smith, J. (2019)." A year inside parentheses is unambiguous.
+_PAREN_YEAR_RE = re.compile(r"\(((?:1[5-9]\d{2}|20[0-2]\d))\)")
+
+#: A bibliography that numbers its entries - ``[1] K. Dasgupta, ...`` - states the
+#: boundary itself, which is more reliable than any punctuation heuristic. Found on
+#: arXiv:0911.2782, a 152-page string-theory thesis with 364 references: the
+#: author-splitting pattern cut after ``[1] `` and produced entries that began
+#: mid-record, one entry's tail becoming the next entry's head.
+_NUMBERED_ENTRY_RE = re.compile(r"^\s*\[(\d{1,4})\]")
 #: The floor for "this year cannot be real".
 #:
 #: This used to be 1950, on the assumption that a thesis cites only modern
@@ -385,7 +421,11 @@ def _entries_from_sentences(lines: Sequence[Sentence]) -> list[tuple[str, int]]:
         pieces = sentence.text.split("\n") if "\n" in sentence.text else [sentence.text]
         for offset, piece in enumerate(pieces):
             line_start = sentence.location.line_start + offset
-            if offset > 0 and _looks_complete(current):
+            if _NUMBERED_ENTRY_RE.match(piece):
+                # The list numbers itself; that is a stronger signal than any
+                # punctuation rule or completeness guess.
+                flush()
+            elif offset > 0 and _looks_complete(current):
                 flush()
             elif offset > 0 and line_start == previous_line and not current:
                 continue
@@ -458,13 +498,20 @@ def _vet(text: str, index: int, this_year: int) -> ReferenceEntry:
     # The publication year sits between the authors and the venue, so it is the
     # first four-digit number that is followed by a comma. Only if that fails does
     # the scan fall back to any year-shaped number.
-    author_position = _AUTHOR_YEAR_RE.search(text)
+    prose = _IDENTIFIER_RE.sub(" ", text)
+    author_position = _AUTHOR_YEAR_RE.findall(prose)
     year: int | None
-    if author_position is not None:
-        year = int(author_position.group(1))
+    if author_position:
+        year = int(author_position[-1])
     else:
-        years = [int(y) for y in _YEAR_RE.findall(text)]
-        year = years[0] if years else None
+        paren = _PAREN_YEAR_RE.search(prose)
+        if paren is not None:
+            year = int(paren.group(1))
+        else:
+            # Last resort, and still the last one rather than the first: a page
+            # number comes after the year in every style measured here.
+            years = [int(y) for y in _YEAR_RE.findall(prose)]
+            year = years[-1] if years else None
 
     has_authors = bool(_INITIAL_RE.search(text)) or len(text.split()) >= 4
     has_venue = bool(_VENUE_HINT_RE.search(text))

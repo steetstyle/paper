@@ -288,7 +288,19 @@ class CheckerSettings(BaseSettings):
             "overlap, institutional similarity filters are applied."
         ),
     )
-    max_chars: int = Field(default=400_000, ge=1000)
+    max_chars: int = Field(
+        default=2_000_000,
+        ge=1000,
+        description=(
+            "Hard cap on analysed characters, for runaway inputs. Measured across "
+            "five real theses (arXiv:1407.6566, 2306.14650, 1911.03731, 0911.2782, "
+            "1912.04141) the sizes run 240,834 to 466,068 characters, so the "
+            "previous 400,000 default silently truncated a 191-page physics "
+            "thesis - and what it cut was the end of the document, which is where "
+            "the bibliography lives. Truncation is now reported as a degraded "
+            "signal rather than passing unnoticed."
+        ),
+    )
     default_encoding: str = "utf-8"
     log_level: str = "INFO"
     disclaimer: bool = Field(

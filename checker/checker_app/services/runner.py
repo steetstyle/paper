@@ -127,10 +127,24 @@ class ScanRunner:
     # ------------------------------------------------------------------ public
     def scan(self, request: ScanRequest) -> DocumentReport:
         started = time.perf_counter()
-        text = request.text[: self.settings.max_chars]
         degraded: list[str] = []
         models: dict[str, str] = {}
 
+        text = request.text[: self.settings.max_chars]
+        if len(request.text) > self.settings.max_chars:
+            # Say it. A truncated document is not a smaller finding, it is a
+            # different one, and the part that gets cut is the end - which on
+            # every real thesis measured here is the bibliography, the one part
+            # that most needs auditing. Measured: at the previous 400,000 limit a
+            # 191-page thesis (466,068 characters) was silently cut and its
+            # reference audit reported 19 entries where there are 417.
+            dropped = len(request.text) - len(text)
+            degraded.append(
+                f"text_truncated: belge {len(request.text)} karakter, "
+                f"{self.settings.max_chars} karakter incelendi; {dropped} "
+                "karakter atlandı. Atlanan kısım belgenin sonudur ve genellikle "
+                "kaynakçadır — kaynakça denetimi eksik kalmış olabilir."
+            )
         segmentation = self.splitter.split(text)
         sentences = segmentation.sentences
         language = self._language(

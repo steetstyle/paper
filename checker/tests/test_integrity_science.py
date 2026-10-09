@@ -136,6 +136,35 @@ def test_homoglyph_still_can_invalidate() -> None:
     assert check_integrity(PROSE + "The рареment was sent. ").tampered
 
 
+def test_a_truncated_document_says_so() -> None:
+    """A truncated document is a different finding, not a smaller one.
+
+    Measured on arXiv:1912.04141, a 191-page thesis of 466,068 characters: at the
+    old 400,000 limit it was silently cut, and what was cut was the end - the
+    bibliography - so the reference audit reported 19 entries where there are 417.
+    """
+    from checker_app.config import CheckerSettings
+    from checker_app.services.runner import ScanRequest, ScanRunner
+
+    # get_settings() is cached and shared, so this test builds its own settings
+    # rather than mutating the shared instance.
+    settings = CheckerSettings(max_chars=2_000)
+    body = "Birinci cümle burada ve oldukça uzun bir cümledir. " * 200
+    report = ScanRunner(settings).scan(
+        ScanRequest(path="memory.md", text=body, use_perplexity=False, use_classifier=False)
+    )
+    assert any("text_truncated" in signal for signal in report.degraded_signals), (
+        f"kırpma bildirilmedi: {report.degraded_signals}"
+    )
+
+
+def test_the_default_limit_holds_a_real_thesis() -> None:
+    """Five real theses run 240,834 to 466,068 characters."""
+    from checker_app.config import CheckerSettings
+
+    assert CheckerSettings.model_fields["max_chars"].default >= 466_068
+
+
 # ------------------------------------------------------------- the whole doc
 def test_a_physics_thesis_is_not_declared_tampered() -> None:
     """The end-to-end property: no false alarm on 60,000 words of science."""

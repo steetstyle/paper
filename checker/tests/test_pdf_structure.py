@@ -213,6 +213,44 @@ def test_a_wrapped_caption_does_not_leave_an_orphan_heading() -> None:
     assert _heading_lines(runs) == []
 
 
+def test_a_bibliography_heading_set_at_body_size_is_still_found() -> None:
+    """Some templates set "References" at body size, where point size cannot see it.
+
+    Measured on arXiv:0911.2782, a 152-page string-theory thesis: the heading sits
+    at 10.9pt against a 10.9pt body, so the whole document was found and the
+    bibliography was never examined - the one part of a thesis that most needs
+    auditing. The fallback is content: a short line that is *nothing but* a
+    bibliography keyword.
+    """
+    runs = [
+        ("Chapter 7 Conclusion", 24.8),
+        ("\n", BODY),
+        ("Body text of the conclusion.\n", BODY),
+        ("References", BODY),
+        ("\n", BODY),
+        ("[1] K. Dasgupta, H. Firouzjahi, R. Gwyn, JHEP, 2002.\n", BODY),
+    ]
+    marked = _mark(runs)
+    assert "# References" in marked, "gövde puntolu kaynakça başlığı kayboldu"
+    before, after = marked.split("# References")
+    assert before.endswith("\n\n"), "başlıktan önce boş satır yok"
+    assert after.startswith("\n\n"), "başlıktan sonra boş satır yok"
+
+
+def test_a_sentement_mentioning_references_is_not_a_heading() -> None:
+    """The keyword must be the entire line, or ordinary prose qualifies."""
+    runs = [
+        ("The references of this thesis are listed at the end of the work.\n", BODY),
+    ]
+    assert _heading_lines(runs) == []
+
+
+def test_the_keyword_fallback_covers_both_languages() -> None:
+    for keyword in ("References", "REFERENCES", "Bibliography", "Kaynakça", "Kaynaklar"):
+        runs = [(keyword, BODY)]
+        assert _heading_lines(runs) == [f"# {keyword}"], keyword
+
+
 # ------------------------------------------------------------------- footers
 def test_a_bare_page_number_is_dropped() -> None:
     """A footer is a bare number, and it is load-bearing too.
@@ -234,7 +272,10 @@ def test_a_bare_page_number_is_dropped() -> None:
     marked = _mark(runs)
     assert "126" not in marked
     assert marked.startswith("Last line of the body.")
-    assert "### References" in marked
+    # Level 1, not the size rank: a standalone bibliography keyword is a top-level
+    # heading by where it sits in the document, whatever the template decided
+    # about its point size - and here it is not even above body size.
+    assert "# References" in marked
 
 
 # ---------------------------------------------------------------- measurement

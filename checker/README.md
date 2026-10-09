@@ -410,6 +410,69 @@ Ve bozukluk mesajı artık **hangi bulgunun** tetiklediğini söylüyor: homogli
 *ikame*, görünmez karakter bir *ekleme* — ve RAID'in ölçtüğü %40.6 düşüş ikamesine
 ait, eklemeye değil.
 
+### Üçüncü tur: iki fizik tezi, ve sessizce atılan bir tez
+
+**0911.2782** (string kuramı, 152 sayfa) ve **1912.04141** (yoğunlaştırılmış madde
+fiziği, 191 sayfa). İkisi de farklı üniversite şablonlarından. Beş tezin tamamı:
+
+| tez | alan | sayfa | sözcük | bölüm | kaynakça cümlesi |
+|---|---|---:|---:|---:|---:|
+| 1407.6566 | Astrofizik | 155 | 60.238 | 85 | 112 |
+| 2306.14650 | YZ (FR/TR) | 153 | 42.094 | 56 | 770 |
+| 1911.03731 | ML | 120 | 45.889 | 72 | 60 |
+| 0911.2782 | String kuramı | 153 | 52.620 | 96 | 561 |
+| 1912.04141 | Yoğunlaştırılmış madde | 192 | 78.422 | 91 | 930 |
+
+#### 1. En ciddi bulgu: sessiz kırpma
+
+`max_chars` **400.000**'dı. 191 sayfalık yoğunlaştırılmış madde tezi
+**466.068** karakter — yani kırpılıyordu. Ve kırpılan yer belgenin **sonu**,
+yani **kaynakça** idi. Sonuç: kaynakça denetimi **417 kayıt yerine 19** kayıt
+gösteriyordu ve hiçbir yerde bunun sebebini söylemiyordu.
+
+Sınır **2.000.000**'a çıkarıldı (ölçülen beş tez 240.834–466.068 karakter), ve
+kırpma artık `degraded_signals` içinde **bildiriliyor**: kaç karakter atlandığı,
+atlanan yerin belgenin sonu olduğu ve kaynakça denetiminin eksik kalabileceği.
+
+#### 2. Gövde punto ile yazılmış kaynakça başlığı
+
+0911.2782'de `References` başlığı **10.9pt** — yani tam olarak gövde punto. Onun
+için punto analizi ulaşamıyor ve tezin **kaynakçası hiç denetlenmiyordu**.
+Çözüm puntodan değil içerikten geliyor: **tek başına duran** bir kaynakça anahtar
+kelimesi (`References`, `Bibliography`, `Kaynakça`, …) başlıktır, ne kadar puntoyla
+yazıldığına bakılmaksızın.
+
+#### 3. Kaynakça girişlerini bölen kurallar
+
+Bu iki tezin kaynakça stilleri daha da farklıydı ve üç hata çıktı:
+
+- **Kayıtlar kendini numaralandırıyordu** (`[1] …`, `[341] …`) ve yazar-bölme
+  kuralı `[1] ` sonrasında kesiyordu: girişler ortadan başlıyor, bir kaydın kuyruğu
+  sonrakinin başı oluyordu. Şimdi liste numarası doğrudan sınır olarak alınıyor.
+- **DOI bir tarih değil.** `10.1103/PhysRevB.77.220503` içinde `1103` var;
+  417 kaydın **263'ü** yılı bir DOI'den okuyordu. Kimlikler (DOI, URL, ISBN,
+  arXiv) yıl aranmadan önce metinden çıkarılıyor.
+- **Yıl deseni aslında üç haneydi.** `1[5-9]\d` deseni `1998` için `199`'u
+  eşleştirip dördüncü hanede takılıyordu — yani **1950–1989 arası yıllar hiç
+  aday olmuyordu.** Hubble 1926, Zwicky 1933/1937, Smith 1936 bu yüzden
+  bulunamıyordu.
+
+#### 4. Yıl hangi konumda? İki stil birbirine zıt
+
+| stil | örnek | yıl |
+|---|---|---|
+| Astrofizik | `Berlind, A. A., et al. 2006, ApJS, 167, 1 4, 11` | **ilk** |
+| hep-th | `vol. 3, pp. 1415–1443, 1999, hep-th/9811131` | **son** |
+| APA | `Smith, J. ve Jones, P. (2019). …` | parantez içi |
+
+İlki virgülle biten sayıyı alınca **cilt** okunuyordu (167, 172, 189), sonkini
+alınca **sayfa aralığının** içinden bir sayfa okunuyordu (1443, 1453). Ayrım şu:
+**yıldan sonra harf gelir** — yayın yeri ya da arXiv kimliği. Cilt ve sayfa
+numarasından sonra ise sayı ya da hiçbir şey gelir.
+
+Sonuç: astrofizik tezinde yanlış yıl **14 → 1**, yoğunlaştırılmış madde tezinde
+**263 → 63**, `review` sayısı **344 → 158**.
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -710,7 +773,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             372 test, model indirmeden
+├── tests/             389 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

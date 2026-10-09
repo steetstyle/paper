@@ -277,6 +277,22 @@ _PDF_FOOTER_RE = re.compile(r"^\d{1,4}$")
 #: alone keep the letters-ratio test happy, so this needs its own rule.
 _PDF_RUNNING_HEADER_RE = re.compile(r"^\d{1,4}\s*[^\w\s]{1,2}\s")
 
+#: Some templates set the bibliography heading at body size, where no amount of
+#: point-size analysis can reach it. Measured on arXiv:0911.2782 (a 152-page
+#: string-theory thesis): "References" sits at 10.9pt against a 10.9pt body, so
+#: the whole document was found and the bibliography was never examined - the
+#: one part of a thesis that most needs auditing.
+#:
+#: The fallback is content, not style: a short line that is *nothing but* a
+#: bibliography keyword. Requiring the entire line to be the keyword keeps a
+#: sentence that merely mentions references out of it, and a thesis whose only
+#: line reading "References" is a heading, not prose.
+_PDF_STANDALONE_KEYWORD_RE = re.compile(
+    r"^(references|bibliography|literature\s+cited|works\s+cited|"
+    r"kaynakça|kaynaklar|referanslar| bibliography)$",
+    re.IGNORECASE,
+)
+
 #: Numbering depth gives the level directly and is more reliable than font size
 #: when a thesis styles 1. and 1.1. at the same point size.
 _PDF_NUMBERED_RE = re.compile(r"^\s*(?:Chapter\s+)?(\d{1,2}(?:\.\d{1,2}){0,3})\.?\s+\S")
@@ -302,7 +318,13 @@ def _pdf_heading_level(
     collapse.
     """
     stripped = text.strip()
-    if not stripped or _PDF_STAMP_RE.match(stripped):
+    if not stripped:
+        return 0
+    if _PDF_STANDALONE_KEYWORD_RE.match(" ".join(stripped.split())):
+        # A bibliography heading set at body size. It is a top-level heading by
+        # position in the document whatever the template decided about its size.
+        return 1
+    if _PDF_STAMP_RE.match(stripped):
         return 0
     if not stripped[0].isalnum():
         # A running header with the page number glued in front of it
@@ -460,19 +482,30 @@ def _mark_pdf_headings(
         # 154-page thesis reported no bibliography at all.
         if not candidate and _PDF_FOOTER_RE.match(block.strip()):
             continue
-        if candidate:
+        # Two ways to earn the heading marker, one way to emit it. The keyword
+        # fallback is asked of every line, body-size ones included, because that
+        # is exactly the case it exists for: on arXiv:0911.2782 the "References"
+        # heading is set at 10.9pt against a 10.9pt body, so it never becomes a
+        # candidate, and the whole bibliography went unexamined - the one part of
+        # a thesis that most needs auditing.
+        level = 0
+        if _PDF_STANDALONE_KEYWORD_RE.match(" ".join(block.strip().split())):
+            level = 1
+        elif candidate:
             level = _pdf_heading_level(block, size, body_size, size_rank)
-            if level:
-                # Blank lines around the heading, and they are load-bearing. PDF
-                # text carries no blank lines at all, so without them the heading
-                # merges with the paragraph below it into one block and
-                # _HEADING_RE - which anchors to the end of the block - never
-                # matches. That was the last reason a 154-page thesis produced a
-                # single section: the 70 headings were in the text and invisible.
-                if out and out[-1].strip():
-                    out.append("")
-                out.append(f"{'#' * level} {block}")
+        if level:
+            # Blank lines around the heading, and they are load-bearing. PDF text
+            # carries no blank lines at all, so without them the heading merges
+            # with the paragraph below it into one block and _HEADING_RE - which
+            # anchors to the end of the block - never matches. That was the last
+            # reason a 154-page thesis produced a single section: the 70 headings
+            # were in the text and invisible. It bit the keyword path too: the
+            # marker was emitted, the block was still glued to the paragraph, and
+            # the section path never advanced past the previous chapter.
+            if out and out[-1].strip():
                 out.append("")
-                continue
+            out.append(f"{'#' * level} {block.strip()}")
+            out.append("")
+            continue
         out.append(block)
     return "\n".join(out)
