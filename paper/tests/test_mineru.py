@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from app.clients.content import mineru_resolver as resolver
-from app.clients.content.mineru import (
+from paper_app.clients.content import mineru_resolver as resolver
+from paper_app.clients.content.mineru import (
     ExtractionError,
     MineruCliBackend,
     MineruExtractor,
@@ -22,15 +22,15 @@ from app.clients.content.mineru import (
     _build_document,
     _count_pages,
 )
-from app.clients.content.mineru_resolver import (
+from paper_app.clients.content.mineru_resolver import (
     GENERATION_1,
     GENERATION_2,
     GENERATION_4,
     MineruApi,
     MineruCli,
 )
-from app.config import MineruSettings
-from app.domain.enums import ContentSource, MineruBackend
+from paper_app.config import MineruSettings
+from paper_app.domain.enums import ContentSource, MineruBackend
 
 SAMPLE_MARKDOWN = """# Attention Is All You Need
 
@@ -286,7 +286,7 @@ class TestPythonApiV4:
 
     def test_unavailable_when_resolver_finds_nothing(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "app.clients.content.mineru.resolve_api", lambda: None
+            "paper_app.clients.content.mineru.resolve_api", lambda: None
         )
         assert MineruPythonApiBackend(MineruSettings()).available() is False
 

@@ -13,22 +13,22 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.clients.arxiv.client import ArxivClient
-from app.clients.arxiv.parser import parse_feed
-from app.config import ChunkingSettings, get_settings
-from app.db.models import Chunk, IngestionRun, Paper, RawDocument
-from app.db.repositories import RunRepository
-from app.db.session import get_session_factory
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store.base import VectorFilter, VectorStore
-from app.db.vector_store.schema import embedding_table
-from app.domain.enums import ContentKind, ContentSource, RunStatus, StepStatus
-from app.domain.models import ContentPayload, SearchQuery
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.infra.storage import LocalBlobStore
-from app.pipeline.context import PipelineContext
-from app.pipeline.runner import PipelineRunner
-from app.pipeline.steps import (
+from paper_app.clients.arxiv.client import ArxivClient
+from paper_app.clients.arxiv.parser import parse_feed
+from paper_app.config import ChunkingSettings, get_settings
+from paper_app.db.models import Chunk, IngestionRun, Paper, RawDocument
+from paper_app.db.repositories import RunRepository
+from paper_app.db.session import get_session_factory
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store.base import VectorFilter, VectorStore
+from paper_app.db.vector_store.schema import embedding_table
+from paper_app.domain.enums import ContentKind, ContentSource, RunStatus, StepStatus
+from paper_app.domain.models import ContentPayload, SearchQuery
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.infra.storage import LocalBlobStore
+from paper_app.pipeline.context import PipelineContext
+from paper_app.pipeline.runner import PipelineRunner
+from paper_app.pipeline.steps import (
     ChunkTextStep,
     EmbedChunksStep,
     ExtractAssetsStep,
@@ -40,8 +40,8 @@ from app.pipeline.steps import (
     IndexVectorsStep,
     PersistMetadataStep,
 )
-from app.services.chunker import ChunkingService
-from app.services.ingestion import IngestionService
+from paper_app.services.chunker import ChunkingService
+from paper_app.services.ingestion import IngestionService
 
 PAPER_HTML = """<!DOCTYPE html>
 <html><head><title>Attention Is All You Need</title>
@@ -108,7 +108,7 @@ class FakeContentFetcher:
         self.downloads = 0
 
     async def fetch_full_text(self, paper, *, prefer_html: bool = True):  # noqa: ANN001
-        from app.clients.content.fetcher import FetchOutcome
+        from paper_app.clients.content.fetcher import FetchOutcome
 
         self.downloads += 1
         if prefer_html:
@@ -252,7 +252,7 @@ class StubExtractor:
     available_backends = ["stub"]
 
     async def extract_pdf(self, path: Path, request=None):  # noqa: ARG002
-        from app.clients.content.mineru import ExtractionError
+        from paper_app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("no PDF in this test")
 
@@ -387,7 +387,7 @@ class TestFullPipeline:
     async def test_abstract_fallback_when_extraction_fails(
         self, settings, provider, chunker, vector_store, content_fetcher, blob_store, space
     ) -> None:
-        from app.clients.content.mineru import ExtractionError
+        from paper_app.clients.content.mineru import ExtractionError
 
         class FailingExtractor:
             """Stands in for an environment where MinerU cannot run."""
@@ -436,7 +436,7 @@ class TestFullPipeline:
             assert extract_step.meta["fallback"] == "abstract_only"
 
     async def test_pdf_path_uses_mineru(self, settings, provider, chunker, vector_store, content_fetcher, blob_store, space) -> None:
-        from app.clients.content.mineru import ExtractedDocument
+        from paper_app.clients.content.mineru import ExtractedDocument
 
         class StubMineru:
             available_backends = ["stub"]
@@ -504,8 +504,8 @@ class TestFullPipeline:
 
 class TestSemanticSearch:
     async def test_query_returns_the_paper(self, settings, provider, chunker, content_fetcher, blob_store, space) -> None:
-        from app.db.vector_store.memory_store import InMemoryVectorStore
-        from app.services.semantic_search import SemanticSearchService
+        from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+        from paper_app.services.semantic_search import SemanticSearchService
 
         # The real in-memory store + hashing provider give deterministic lexical overlap.
         store = InMemoryVectorStore(space)
@@ -543,8 +543,8 @@ class TestSemanticSearch:
     async def test_search_respects_paper_filter(
         self, settings, provider, chunker, content_fetcher, blob_store, space
     ) -> None:
-        from app.db.vector_store.memory_store import InMemoryVectorStore
-        from app.services.semantic_search import SemanticSearchService
+        from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+        from paper_app.services.semantic_search import SemanticSearchService
 
         store = InMemoryVectorStore(space)
         steps = [
@@ -607,7 +607,7 @@ def test_blob_store_is_content_addressed(tmp_path: Path) -> None:
 
 
 def test_html_extraction_drops_chrome() -> None:
-    from app.clients.content.html_extractor import html_to_markdown
+    from paper_app.clients.content.html_extractor import html_to_markdown
 
     markdown = html_to_markdown(PAPER_HTML)
     assert "alert(" not in markdown

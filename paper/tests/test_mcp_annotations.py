@@ -27,7 +27,7 @@ from collections.abc import Iterator
 
 import pytest
 
-SERVER = pathlib.Path(__file__).resolve().parents[1] / "app" / "mcp" / "server.py"
+SERVER = pathlib.Path(__file__).resolve().parents[1] / "paper_app" / "mcp" / "server.py"
 
 #: The handles that actually perform network I/O.
 #:

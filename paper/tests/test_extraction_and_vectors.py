@@ -6,22 +6,22 @@ from pathlib import Path
 
 import pytest
 
-from app.clients.content.mineru import (
+from paper_app.clients.content.mineru import (
     ExtractionError,
     MineruExtractor,
     _build_document,
     _render_block,
 )
-from app.config import EmbeddingSettings, MineruSettings
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store.base import VectorFilter
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.domain.enums import ContentSource, MineruBackend
-from app.domain.models import VectorRecord
-from app.embeddings.base import EmbeddingError
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.embeddings.registry import build_provider, register_provider
-from app.infra.text import split_sentences, strip_arxiv_noise
+from paper_app.config import EmbeddingSettings, MineruSettings
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store.base import VectorFilter
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.domain.enums import ContentSource, MineruBackend
+from paper_app.domain.models import VectorRecord
+from paper_app.embeddings.base import EmbeddingError
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.embeddings.registry import build_provider, register_provider
+from paper_app.infra.text import split_sentences, strip_arxiv_noise
 
 
 class TestMineruExtractor:

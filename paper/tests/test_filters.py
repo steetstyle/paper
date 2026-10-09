@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from app.clients.arxiv.filters import SearchRequest, search_query_from
-from app.clients.arxiv.query import build_search_params
-from app.domain.filters import (
+from paper_app.clients.arxiv.filters import SearchRequest, search_query_from
+from paper_app.clients.arxiv.query import build_search_params
+from paper_app.domain.filters import (
     ArxivField,
     ArxivFilter,
     ArxivOperator,
@@ -24,7 +24,7 @@ from app.domain.filters import (
     quote_if_needed,
     validate_arxiv_query,
 )
-from app.domain.models import PaperMetadata, SearchQuery
+from paper_app.domain.models import PaperMetadata, SearchQuery
 
 
 def metadata(**overrides: Any) -> PaperMetadata:
@@ -523,14 +523,14 @@ class TestBareTermsAreOredNotAnded:
         assert not any("ORs adjacent" in w for w in validate_arxiv_query("(sheaf)").warnings)
 
     def test_split_reports_terms_and_operators(self) -> None:
-        from app.domain.filters import _split_bare_terms
+        from paper_app.domain.filters import _split_bare_terms
 
         assert _split_bare_terms("sheaf neural network") == (["sheaf", "neural", "network"], [])
         assert _split_bare_terms("ti:a AND cat:cs.CL") == ([], ["AND"])
         assert _split_bare_terms('ti:"a b c"') == ([], [])
 
     def test_the_warning_reaches_every_surface(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         request = search_query_from(raw="sheaf neureal network")
         assert any("ORs adjacent" in w for w in request.warnings)
@@ -543,19 +543,19 @@ class TestPhraseSupport:
     """
 
     def test_phrase_is_quoted(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         request = search_query_from(phrases=["sheaf neural network"])
         assert request.filter.compile() == '"sheaf neural network"'
 
     def test_phrases_are_ored(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         request = search_query_from(phrases=["a b", "c d"])
         assert request.filter.compile() == '"a b" OR "c d"'
 
     def test_already_quoted_phrase_is_left_alone(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         request = search_query_from(phrases=['"a b"'])
         assert request.filter.compile() == '"a b"'
@@ -569,7 +569,7 @@ class TestPhraseSupport:
         """An unquoted `--phrase a b c` is split by the shell into a phrase plus
         two positional words. Losing the positional part would silently change
         the search, so both survive."""
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         request = search_query_from(phrases=["sheaf"], raw="neureal network")
         compiled = request.filter.compile()
@@ -578,24 +578,24 @@ class TestPhraseSupport:
         assert " AND " in compiled
 
     def test_no_leading_operator(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         compiled = search_query_from(phrases=["x"], raw="cat:cs.CL").filter.compile()
         assert not compiled.startswith("AND")
         assert compiled == '"x" AND cat:cs.CL'
 
     def test_phrase_alone_needs_no_operator(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         assert not search_query_from(phrases=["x y"]).filter.compile().startswith("AND")
 
     def test_raw_alone_is_unchanged(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         assert search_query_from(raw="ti:x").filter.compile() == "ti:x"
 
     def test_empty_phrases_fall_through_to_raw(self) -> None:
-        from app.clients.arxiv.filters import search_query_from
+        from paper_app.clients.arxiv.filters import search_query_from
 
         assert search_query_from(phrases=["  "], raw="ti:x").filter.compile() == "ti:x"
 

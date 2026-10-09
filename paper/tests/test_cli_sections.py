@@ -28,8 +28,8 @@ import pytest
 from click.testing import CliRunner, Result
 from typer.main import get_command
 
-from app.cli import app
-from app.container import Container, set_container
+from paper_app.cli import app
+from paper_app.container import Container, set_container
 
 DOC = "solid-state-basics"
 FLAT_DOC = "pethick-superconductivity"
@@ -74,7 +74,7 @@ FLAT_CHUNKS = [
 @pytest.fixture
 def container(settings, tmp_path: Path) -> Any:  # noqa: ANN401
     """The real container, with the in-memory vector store the suite uses."""
-    from app.db.vector_store.memory_store import InMemoryVectorStore  # noqa: PLC0415
+    from paper_app.db.vector_store.memory_store import InMemoryVectorStore  # noqa: PLC0415
 
     container = Container(settings)
     space = container.default_space
@@ -90,15 +90,15 @@ def container(settings, tmp_path: Path) -> Any:  # noqa: ANN401
 
 async def _seed(container) -> None:  # noqa: ANN001
     """Two documents, one of them with no structure recorded at all."""
-    from app.db.repositories import (  # noqa: PLC0415
+    from paper_app.db.repositories import (  # noqa: PLC0415
         ChunkRepository,
         PaperRepository,
         RawDocumentRepository,
         SectionRepository,
     )
-    from app.domain.enums import ChunkKind  # noqa: PLC0415
-    from app.domain.models import ContentSource, PaperMetadata, TextChunk  # noqa: PLC0415
-    from app.services.sections import Section  # noqa: PLC0415
+    from paper_app.domain.enums import ChunkKind  # noqa: PLC0415
+    from paper_app.domain.models import ContentSource, PaperMetadata, TextChunk  # noqa: PLC0415
+    from paper_app.services.sections import Section  # noqa: PLC0415
 
     async with container.session_factory() as session:
         papers = PaperRepository(session)
@@ -193,8 +193,8 @@ async def _index(container) -> None:  # noqa: ANN001
     """
     from sqlalchemy import select  # noqa: PLC0415
 
-    from app.db.models import Chunk  # noqa: PLC0415
-    from app.domain.models import VectorRecord  # noqa: PLC0415
+    from paper_app.db.models import Chunk  # noqa: PLC0415
+    from paper_app.domain.models import VectorRecord  # noqa: PLC0415
 
     space = container.default_space
     provider = container.provider_for(space)
@@ -257,7 +257,7 @@ def _wide_console(monkeypatch) -> None:  # noqa: ANN001
     without this a 305-page book's headings are ellipsised mid-title and every
     assertion in this file would be about column arithmetic rather than content.
     """
-    from app.cli import console  # noqa: PLC0415
+    from paper_app.cli import console  # noqa: PLC0415
 
     monkeypatch.setattr(console, "width", 200)
 
@@ -270,7 +270,7 @@ def _clear_read_only() -> Any:  # noqa: ANN401
     asked for were in force, so it is restored here rather than only in the tests
     that set it.
     """
-    from app.cli import read_mode  # noqa: PLC0415
+    from paper_app.cli import read_mode  # noqa: PLC0415
 
     yield
     read_mode(False)
@@ -302,7 +302,7 @@ def _first_line(output: str) -> str:
 
 async def _levels(container, doc_key: str) -> dict[str, int]:  # noqa: ANN001
     """Stored heading levels of one document, by title."""
-    from app.db.repositories import PaperRepository, SectionRepository  # noqa: PLC0415
+    from paper_app.db.repositories import PaperRepository, SectionRepository  # noqa: PLC0415
 
     async with container.session_factory() as session:
         paper = await PaperRepository(session).resolve(doc_key)

@@ -1,7 +1,7 @@
 """embedding space registry
 
 Vector tables are created per model at runtime (see
-``app/db/vector_store/schema.py``) because pgvector's ``vector(n)`` column and
+``paper_app/db/vector_store/schema.py``) because pgvector's ``vector(n)`` column and
 its HNSW index are width-locked. This migration only adds the *registry*: one
 row per known model.
 
@@ -48,7 +48,7 @@ def upgrade() -> None:
 
     # Seed the default space from settings so an existing deployment is
     # immediately addressable by name. The table it points at already exists.
-    from app.config import get_settings  # noqa: PLC0415
+    from paper_app.config import get_settings  # noqa: PLC0415
 
     settings = get_settings()
     space = settings.embedding.space or "default"

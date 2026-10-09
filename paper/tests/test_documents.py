@@ -20,10 +20,10 @@ from pathlib import Path
 
 import pytest
 
-from app.clients.content.pdf_info import OutlineNode, with_page_ranges
-from app.domain.models import MineruOptions, PageRange, PaperMetadata, doc_slug
-from app.services.page_map import build_page_map, normalise
-from app.services.sections import (
+from paper_app.clients.content.pdf_info import OutlineNode, with_page_ranges
+from paper_app.domain.models import MineruOptions, PageRange, PaperMetadata, doc_slug
+from paper_app.services.page_map import build_page_map, normalise
+from paper_app.services.sections import (
     Section,
     _section_key,
     build_sections,
@@ -160,7 +160,7 @@ class TestUpsertingADocumentTwice:
         return PaperMetadata.from_file(**base)  # type: ignore[arg-type]
 
     async def test_the_same_document_upserts_to_one_row(self, session) -> None:
-        from app.db.repositories import PaperRepository  # noqa: PLC0415
+        from paper_app.db.repositories import PaperRepository  # noqa: PLC0415
 
         repo = PaperRepository(session)
         first = await repo.upsert(self._metadata())
@@ -169,7 +169,7 @@ class TestUpsertingADocumentTwice:
         assert first.id == second.id
 
     async def test_a_refreshed_title_replaces_the_old_one(self, session) -> None:
-        from app.db.repositories import PaperRepository  # noqa: PLC0415
+        from paper_app.db.repositories import PaperRepository  # noqa: PLC0415
 
         repo = PaperRepository(session)
         await repo.upsert(self._metadata())
@@ -179,7 +179,7 @@ class TestUpsertingADocumentTwice:
         assert refreshed.title == "Superconductivity"
 
     async def test_a_document_is_found_by_its_doc_key(self, session) -> None:
-        from app.db.repositories import PaperRepository  # noqa: PLC0415
+        from paper_app.db.repositories import PaperRepository  # noqa: PLC0415
 
         repo = PaperRepository(session)
         await repo.upsert(self._metadata())
@@ -188,7 +188,7 @@ class TestUpsertingADocumentTwice:
         assert found is not None and found.arxiv_id is None
 
     async def test_list_documents_sees_only_local_files(self, session) -> None:
-        from app.db.repositories import PaperRepository  # noqa: PLC0415
+        from paper_app.db.repositories import PaperRepository  # noqa: PLC0415
 
         repo = PaperRepository(session)
         await repo.upsert(self._metadata())

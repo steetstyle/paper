@@ -13,9 +13,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.db.repositories import PaperRepository
-from app.db.session import get_session_factory
-from app.domain.models import Author, PaperMetadata
+from paper_app.db.repositories import PaperRepository
+from paper_app.db.session import get_session_factory
+from paper_app.domain.models import Author, PaperMetadata
 
 VERSIONS = [
     "1706.03762",
@@ -57,7 +57,7 @@ async def stored(container):  # noqa: ANN201
 
 @pytest.fixture
 def container(settings, tmp_path):  # noqa: ANN201
-    from app.container import Container, set_container
+    from paper_app.container import Container, set_container
 
     container = Container(settings)
     container._blobs = None  # type: ignore[assignment]  # noqa: SLF001
@@ -94,7 +94,7 @@ class TestVersionedLookup:
         Replaced by a proper parse, so ``solv-int/9712001`` stays intact instead
         of becoming ``sol``.
         """
-        from app.domain.ids import normalize_arxiv_id
+        from paper_app.domain.ids import normalize_arxiv_id
 
         assert normalize_arxiv_id("solv-int/9712001") == "solv-int/9712001"
         assert normalize_arxiv_id("math.CO/0309136v2") == "math.CO/0309136"
@@ -103,7 +103,7 @@ class TestVersionedLookup:
         """Guard against the ``split("v")[0]`` pattern coming back."""
         from pathlib import Path
 
-        root = Path(__file__).resolve().parent.parent / "app"
+        root = Path(__file__).resolve().parent.parent / "paper_app"
         offenders = [
             str(path.relative_to(root.parent))
             for path in root.rglob("*.py")

@@ -8,14 +8,14 @@ import httpx
 import pytest
 from test_pipeline_e2e import FEED, PAPER_HTML, FakeContentFetcher
 
-from app.config import ChunkingSettings
-from app.container import Container, set_container
-from app.db.session import dispose_engines
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.infra.storage import LocalBlobStore
-from app.main import create_app
-from app.services.chunker import ChunkingService
+from paper_app.config import ChunkingSettings
+from paper_app.container import Container, set_container
+from paper_app.db.session import dispose_engines
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.infra.storage import LocalBlobStore
+from paper_app.main import create_app
+from paper_app.services.chunker import ChunkingService
 
 
 class FakeHttp:
@@ -37,7 +37,7 @@ class StubExtractor:
         return {"stub": "stub (fake)"}
 
     async def extract_pdf(self, path: Path, request=None):  # noqa: ARG002
-        from app.clients.content.mineru import ExtractionError
+        from paper_app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("unused")
 

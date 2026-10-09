@@ -59,8 +59,8 @@ async def _seed_document(container, doc_key: str, title: str, rows, *, kind="boo
     """
     from sqlalchemy import delete
 
-    from app.db.models import DocumentSection, Paper
-    from app.db.repositories import PaperRepository
+    from paper_app.db.models import DocumentSection, Paper
+    from paper_app.db.repositories import PaperRepository
 
     async with container.session_factory() as session:
         paper = await PaperRepository(session).resolve(doc_key)
@@ -100,7 +100,7 @@ def sections_requested(monkeypatch):
     a policy change rather than plumbing — an empty list is a filter that matches
     *nothing*.
     """
-    from app.services.semantic_search import SemanticSearchService
+    from paper_app.services.semantic_search import SemanticSearchService
 
     real = SemanticSearchService.search
     seen: list[list[tuple[str, int]] | None] = []

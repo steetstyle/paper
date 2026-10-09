@@ -15,11 +15,11 @@ from typing import Any
 import pytest
 from sqlalchemy import func, select
 
-from app.db.models import Author, Category, Paper, PaperAuthor, PaperCategory
-from app.db.repositories import PaperRepository, normalize_author_name
-from app.db.session import get_session_factory
-from app.domain.models import Author as AuthorSpec
-from app.domain.models import PaperMetadata
+from paper_app.db.models import Author, Category, Paper, PaperAuthor, PaperCategory
+from paper_app.db.repositories import PaperRepository, normalize_author_name
+from paper_app.db.session import get_session_factory
+from paper_app.domain.models import Author as AuthorSpec
+from paper_app.domain.models import PaperMetadata
 
 
 def metadata(

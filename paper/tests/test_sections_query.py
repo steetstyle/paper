@@ -1,6 +1,6 @@
 """Sections found by the name a reader uses for them.
 
-:mod:`app.services.sections_query` answers a question no vector store can: which
+:mod:`paper_app.services.sections_query` answers a question no vector store can: which
 rows of ``document_sections`` did "Debye" mean? The table is written here through
 the ORM rather than by the pipeline, because building it from a PDF has its own
 tests and what is at stake below is *matching* — the table is the input, not the
@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.models import DocumentSection, Paper
-from app.db.repositories import SectionRepository
-from app.services.sections_query import find_sections, is_section_number, sections_within
+from paper_app.db.models import DocumentSection, Paper
+from paper_app.db.repositories import SectionRepository
+from paper_app.services.sections_query import find_sections, is_section_number, sections_within
 
 # (ordinal, title, level, page_start, page_end, source)
 BOOK_SECTIONS = [

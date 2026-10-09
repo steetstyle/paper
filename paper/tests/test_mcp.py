@@ -14,11 +14,11 @@ import pytest
 from sqlalchemy import func, select
 from test_pipeline_e2e import PAPER_HTML, FakeContentFetcher, FakeHttp
 
-from app.db.models import Chunk, Paper
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.db.vector_store.schema import embedding_table
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.db.models import Chunk, Paper
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.db.vector_store.schema import embedding_table
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
 
 
 class StubExtractor:
@@ -28,14 +28,14 @@ class StubExtractor:
         return {"stub": "stub (fake)"}
 
     async def extract_pdf(self, path: Path):  # noqa: ARG002
-        from app.clients.content.mineru import ExtractionError
+        from paper_app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("unused")
 
 
 @pytest.fixture
 def container(settings, tmp_path: Path):  # noqa: ANN201
-    from app.container import Container, set_container
+    from paper_app.container import Container, set_container
 
     settings.chunking = settings.chunking.model_copy(
         update={"max_tokens": 80, "overlap_tokens": 15, "min_tokens": 5}
@@ -45,7 +45,7 @@ def container(settings, tmp_path: Path):  # noqa: ANN201
     provider = HashingEmbeddingProvider(model="hashing-test", dimensions=64)
     container._http = FakeHttp()  # noqa: SLF001
     container._blobs = __import__(  # noqa: SLF001
-        "app.infra.storage", fromlist=["LocalBlobStore"]
+        "paper_app.infra.storage", fromlist=["LocalBlobStore"]
     ).LocalBlobStore(root=tmp_path / "blobs")
     container._fetcher = FakeContentFetcher(blob_store=container.blob_store, html=PAPER_HTML)  # noqa: SLF001
     container._mineru = StubExtractor()  # noqa: SLF001
@@ -68,7 +68,7 @@ def container(settings, tmp_path: Path):  # noqa: ANN201
 @pytest.fixture
 def mcp_server(container, monkeypatch):  # noqa: ANN201
     """The real server, wired to the test container."""
-    from app.mcp import server as mod
+    from paper_app.mcp import server as mod
 
     monkeypatch.setattr(mod, "get_container", lambda _s=None: container)
     return mod.server
@@ -102,7 +102,7 @@ async def acall(_server, _tool: str, /, **arguments) -> dict:  # noqa: ANN001
 
 async def ingest_into(container, space=None, arxiv_id: str = "1706.03762") -> str:  # noqa: ANN001
     """Run the real pipeline once so there is a corpus to search."""
-    from app.services.ingestion import build_ingestion_service
+    from paper_app.services.ingestion import build_ingestion_service
 
     service = build_ingestion_service(container, space)
     result = await service.ingest_paper(
@@ -276,7 +276,7 @@ class TestRegistration:
         assert templates == ["paper://{arxiv_id}"]
 
     def test_instructions_mention_the_flow(self, mcp_server) -> None:
-        from app.mcp.server import INSTRUCTIONS
+        from paper_app.mcp.server import INSTRUCTIONS
 
         assert "search_arxiv" in INSTRUCTIONS
         assert "ingest_paper" in INSTRUCTIONS
@@ -423,14 +423,14 @@ class TestSpacesAndStatus:
 
 class TestResources:
     async def test_spaces_resource(self, container) -> None:
-        from app.mcp import server as mod
+        from paper_app.mcp import server as mod
 
         payload = json.loads(await mod.spaces_resource())
         assert "active" in payload
         assert isinstance(payload["spaces"], list)
 
     async def test_paper_resource(self, container) -> None:
-        from app.mcp import server as mod
+        from paper_app.mcp import server as mod
 
         payload = json.loads(await mod.paper_resource("1706.03762"))
         assert payload["arxiv_id"] == "1706.03762"
@@ -440,7 +440,7 @@ class TestResources:
 class TestSpaceIsolationThroughMcp:
     async def test_mcp_ingest_writes_only_the_named_space(self, container) -> None:
         """Ingest through MCP into one space; the other must stay empty."""
-        from app.services.ingestion import build_ingestion_service
+        from paper_app.services.ingestion import build_ingestion_service
 
         other = EmbeddingSpace(
             name="other-128", provider="hashing", model="hashing-128", dimensions=128
@@ -483,8 +483,8 @@ class TestSpaceIsolationThroughMcp:
 
     async def test_search_tool_is_space_scoped(self, container, mcp_server) -> None:
         """A space with no vectors must report an empty corpus, not another's."""
-        from app.db.space_repository import EmbeddingSpaceRepository
-        from app.services.ingestion import build_ingestion_service
+        from paper_app.db.space_repository import EmbeddingSpaceRepository
+        from paper_app.services.ingestion import build_ingestion_service
 
         await ingest_into(container)  # populates the default space
 

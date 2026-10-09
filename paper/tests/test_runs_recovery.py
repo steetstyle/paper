@@ -24,12 +24,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from app.db.models import IngestionRun, Paper, PipelineStepRun
-from app.db.repositories import RawDocumentRepository, RunRepository
-from app.db.session import get_session_factory
-from app.domain.enums import ContentKind, RunStatus
-from app.pipeline.steps import ExtractTextStep
-from app.services.runs import find_stale_runs, reap_stale_runs, resume_instead_of_skip
+from paper_app.db.models import IngestionRun, Paper, PipelineStepRun
+from paper_app.db.repositories import RawDocumentRepository, RunRepository
+from paper_app.db.session import get_session_factory
+from paper_app.domain.enums import ContentKind, RunStatus
+from paper_app.pipeline.steps import ExtractTextStep
+from paper_app.services.runs import find_stale_runs, reap_stale_runs, resume_instead_of_skip
 
 
 def _hours_ago(hours: float) -> datetime:
@@ -284,7 +284,7 @@ class TestRecordingTheSameContentTwice:
     """
 
     async def test_new_metadata_survives_a_repeat_record(self, session, blob_store) -> None:
-        from app.db.repositories import RawDocumentRepository  # noqa: PLC0415
+        from paper_app.db.repositories import RawDocumentRepository  # noqa: PLC0415
 
         paper = Paper(arxiv_id="1706.03762", doc_key="1706.03762", title="T", abstract="")
         session.add(paper)
@@ -319,7 +319,7 @@ class TestRecordingTheSameContentTwice:
         assert second.meta["blocks_sha256"] == "b" * 64
 
     async def test_an_older_fact_is_not_erased_by_a_later_record(self, session, blob_store) -> None:
-        from app.db.repositories import RawDocumentRepository  # noqa: PLC0415
+        from paper_app.db.repositories import RawDocumentRepository  # noqa: PLC0415
 
         paper = Paper(arxiv_id="1706.03762", doc_key="1706.03762", title="T", abstract="")
         session.add(paper)
@@ -365,7 +365,7 @@ class TestResumingAnExtraction:
         test pass for the wrong reason: nothing would be extracted and nothing
         would be resumed.
         """
-        from app.infra.storage import LocalBlobStore  # noqa: PLC0415
+        from paper_app.infra.storage import LocalBlobStore  # noqa: PLC0415
 
         return LocalBlobStore(root=tmp_path / "blobs")
 
@@ -377,8 +377,8 @@ class TestResumingAnExtraction:
             self.calls = 0
 
         async def extract_pdf(self, *args, **kwargs):  # noqa: ANN002, ANN003
-            from app.domain.enums import ContentSource  # noqa: PLC0415
-            from app.domain.models import ExtractedDocument  # noqa: PLC0415
+            from paper_app.domain.enums import ContentSource  # noqa: PLC0415
+            from paper_app.domain.models import ExtractedDocument  # noqa: PLC0415
 
             self.calls += 1
             text = "## MinerU ran"
@@ -397,8 +397,8 @@ class TestResumingAnExtraction:
         is set *and* its bytes are in the store — otherwise the extraction path
         stops at "blob missing" and the test proves nothing about resumption.
         """
-        from app.domain.models import ContentPayload  # noqa: PLC0415
-        from app.pipeline.context import PipelineContext  # noqa: PLC0415
+        from paper_app.domain.models import ContentPayload  # noqa: PLC0415
+        from paper_app.pipeline.context import PipelineContext  # noqa: PLC0415
 
         source = blobs.put_bytes(b"%PDF-1.7 source", prefix="raw")
         ctx = PipelineContext(

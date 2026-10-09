@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from app.config import ChunkingSettings
-from app.domain.enums import ContentSource
-from app.infra.text import approx_tokens, strip_markdown
-from app.services.chunker import ChunkingService
+from paper_app.config import ChunkingSettings
+from paper_app.domain.enums import ContentSource
+from paper_app.infra.text import approx_tokens, strip_markdown
+from paper_app.services.chunker import ChunkingService
 
 MARKDOWN = """# Introduction
 

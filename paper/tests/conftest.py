@@ -19,12 +19,12 @@ os.environ.setdefault("CHUNK_MIN_TOKENS", "5")
 os.environ.setdefault("ARXIV_REQUEST_INTERVAL_SECONDS", "0")
 os.environ.setdefault("ARXIV_DOWNLOAD_DELAY_SECONDS", "0")
 
-from app.clients.arxiv.parser import render_entry_xml, render_feed_xml  # noqa: E402
-from app.config import AppSettings, reload_settings  # noqa: E402
-from app.db.session import create_all, dispose_engines, session_scope  # noqa: E402
-from app.domain.models import PaperMetadata  # noqa: E402
-from app.embeddings.hashing_provider import HashingEmbeddingProvider  # noqa: E402
-from app.infra.storage import MemoryBlobStore  # noqa: E402
+from paper_app.clients.arxiv.parser import render_entry_xml, render_feed_xml  # noqa: E402
+from paper_app.config import AppSettings, reload_settings  # noqa: E402
+from paper_app.db.session import create_all, dispose_engines, session_scope  # noqa: E402
+from paper_app.domain.models import PaperMetadata  # noqa: E402
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider  # noqa: E402
+from paper_app.infra.storage import MemoryBlobStore  # noqa: E402
 
 FIXTURE_ENTRY = {
     "id": "http://arxiv.org/abs/1706.03762v5",
@@ -82,7 +82,7 @@ def feed_xml_multi() -> str:
 def paper_metadata() -> PaperMetadata:
     from xml.etree import ElementTree as ET
 
-    from app.clients.arxiv.parser import parse_entry
+    from paper_app.clients.arxiv.parser import parse_entry
 
     entry = ET.fromstring(f"<entry xmlns:arxiv='http://arxiv.org/schemas/atom'>"
                           f"{render_entry_xml(FIXTURE_ENTRY)}</entry>")

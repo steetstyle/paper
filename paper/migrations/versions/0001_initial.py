@@ -28,7 +28,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-from app.config import get_settings
+from paper_app.config import get_settings
 
 revision: str = "0001_initial"
 down_revision: str | None = None

@@ -10,23 +10,23 @@ import pytest
 from sqlalchemy import func, select
 from test_pipeline_e2e import FEED, PAPER_HTML, FakeContentFetcher
 
-from app.clients.arxiv.client import ArxivClient
-from app.clients.content.html_extractor import html_to_markdown
-from app.config import ChunkingSettings, get_settings
-from app.db.models import Chunk
-from app.db.repositories import RunRepository
-from app.db.session import get_session_factory
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store import schema
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.db.vector_store.schema import embedding_table, ensure_space_table
-from app.domain.enums import ContentSource
-from app.domain.models import ExtractedDocument
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.infra.storage import LocalBlobStore
-from app.pipeline.context import PipelineContext
-from app.pipeline.runner import PipelineRunner
-from app.pipeline.steps import (
+from paper_app.clients.arxiv.client import ArxivClient
+from paper_app.clients.content.html_extractor import html_to_markdown
+from paper_app.config import ChunkingSettings, get_settings
+from paper_app.db.models import Chunk
+from paper_app.db.repositories import RunRepository
+from paper_app.db.session import get_session_factory
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store import schema
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.db.vector_store.schema import embedding_table, ensure_space_table
+from paper_app.domain.enums import ContentSource
+from paper_app.domain.models import ExtractedDocument
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.infra.storage import LocalBlobStore
+from paper_app.pipeline.context import PipelineContext
+from paper_app.pipeline.runner import PipelineRunner
+from paper_app.pipeline.steps import (
     ChunkTextStep,
     EmbedChunksStep,
     FetchContentStep,
@@ -37,7 +37,7 @@ from app.pipeline.steps import (
     Step,
     StepResult,
 )
-from app.services.chunker import ChunkingService
+from paper_app.services.chunker import ChunkingService
 
 
 @pytest.fixture(autouse=True)

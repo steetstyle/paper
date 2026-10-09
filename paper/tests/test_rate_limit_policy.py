@@ -20,7 +20,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.infra.http import RETRYABLE_STATUS, HttpError, HttpFetcher, RateLimiter
+from paper_app.infra.http import RETRYABLE_STATUS, HttpError, HttpFetcher, RateLimiter
 
 
 def _fetcher(statuses: list[int], *, max_retries: int = 4) -> tuple[HttpFetcher, list[str]]:
@@ -32,7 +32,7 @@ def _fetcher(statuses: list[int], *, max_retries: int = 4) -> tuple[HttpFetcher,
         index = min(len(seen) - 1, len(statuses) - 1)
         return httpx.Response(statuses[index], text="body")
 
-    from app.config import get_settings
+    from paper_app.config import get_settings
 
     base = get_settings().arxiv
     settings = base.model_copy(
@@ -111,9 +111,9 @@ class TestTheMessageTellsTheCallerWhatToDo:
 
     @pytest.mark.asyncio
     async def test_a_429_becomes_a_rate_limit_error_saying_so(self) -> None:
-        from app.clients.arxiv.client import ArxivClient
-        from app.clients.arxiv.exceptions import ArxivRateLimited
-        from app.config import get_settings
+        from paper_app.clients.arxiv.client import ArxivClient
+        from paper_app.clients.arxiv.exceptions import ArxivRateLimited
+        from paper_app.config import get_settings
 
         fetcher, _ = _fetcher([429])
         client = ArxivClient(get_settings().arxiv, fetcher)
@@ -131,9 +131,9 @@ class TestTheMessageTellsTheCallerWhatToDo:
     async def test_the_spacing_is_mentioned_because_it_already_is_applied(self) -> None:
         """Otherwise the message reads as an accusation the client could fix by
         slowing down, which it already does."""
-        from app.clients.arxiv.client import ArxivClient
-        from app.clients.arxiv.exceptions import ArxivRateLimited
-        from app.config import get_settings
+        from paper_app.clients.arxiv.client import ArxivClient
+        from paper_app.clients.arxiv.exceptions import ArxivRateLimited
+        from paper_app.config import get_settings
 
         fetcher, _ = _fetcher([429])
         client = ArxivClient(get_settings().arxiv, fetcher)

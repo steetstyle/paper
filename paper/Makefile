@@ -43,17 +43,17 @@ test: ## Run the test suite
 	.venv/bin/pytest -q
 
 test-cov: ## Run tests with a coverage report
-	.venv/bin/pytest --cov=app --cov-report=term-missing
+	.venv/bin/pytest --cov=paper_app --cov-report=term-missing
 
 lint: ## Lint
-	.venv/bin/ruff check app tests
+	.venv/bin/ruff check paper_app tests
 
 fmt: ## Format and autofix
-	.venv/bin/ruff format app tests
-	.venv/bin/ruff check --fix app tests
+	.venv/bin/ruff format paper_app tests
+	.venv/bin/ruff check --fix paper_app tests
 
 typecheck: ## Static types
-	.venv/bin/mypy app
+	.venv/bin/mypy paper_app
 
 doctor: ## Check DB, vector store, MinerU and embedding config
 	.venv/bin/paper doctor

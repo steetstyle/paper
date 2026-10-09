@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.api.devices import parse_device
+from paper_app.api.devices import parse_device
 
 # The app-level `container` and `client` fixtures live in test_api.py; loading
 # that module as a plugin reuses them instead of rebuilding the app and its
@@ -40,7 +40,7 @@ def devices_requested(monkeypatch):  # noqa: ANN201
     deciding that "no device" means "the configured one" is that function's job
     and not the route's.
     """
-    import app.services.ingestion as ingestion
+    import paper_app.services.ingestion as ingestion
 
     real = ingestion.build_ingestion_service
     seen: list[str | None] = []
@@ -56,7 +56,7 @@ def devices_requested(monkeypatch):  # noqa: ANN201
 @pytest.fixture
 def devices_embedded_on(monkeypatch):  # noqa: ANN201
     """Every ``device`` the pipeline is actually built with."""
-    from app.container import Container
+    from paper_app.container import Container
 
     real = Container.build_steps
     seen: list[str | None] = []
@@ -216,7 +216,7 @@ class TestIngestDevice:
             called = True
             raise AssertionError("ingestion started despite an invalid device")
 
-        monkeypatch.setattr("app.services.ingestion.build_ingestion_service", fail)
+        monkeypatch.setattr("paper_app.services.ingestion.build_ingestion_service", fail)
         response = await client.post(
             "/api/v1/ingest", json={"arxiv_id": ARXIV_ID, "device": "nope"}
         )

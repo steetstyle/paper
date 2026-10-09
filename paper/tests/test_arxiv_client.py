@@ -6,10 +6,10 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from app.clients.arxiv.exceptions import ArxivParseError
-from app.clients.arxiv.parser import parse_entry, parse_feed
-from app.clients.arxiv.query import build_search_query
-from app.domain.models import SearchQuery
+from paper_app.clients.arxiv.exceptions import ArxivParseError
+from paper_app.clients.arxiv.parser import parse_entry, parse_feed
+from paper_app.clients.arxiv.query import build_search_query
+from paper_app.domain.models import SearchQuery
 
 
 @pytest.mark.parametrize(
@@ -100,8 +100,8 @@ class TestGetPaperFallback:
 
     @staticmethod
     def _client(*, bodies: list, settings=None):  # noqa: ANN205
-        from app.clients.arxiv.client import ArxivClient
-        from app.config import get_settings
+        from paper_app.clients.arxiv.client import ArxivClient
+        from paper_app.config import get_settings
 
         payload = iter(bodies)
 
@@ -139,7 +139,7 @@ class TestGetPaperFallback:
 
     @pytest.mark.asyncio
     async def test_old_style_id_resolves_through_id_list(self) -> None:
-        from app.clients.arxiv.parser import render_feed_xml
+        from paper_app.clients.arxiv.parser import render_feed_xml
 
         client, fetcher = self._client(
             bodies=[render_feed_xml([self._entry("cond-mat/0404680v1")]).encode()]
@@ -157,8 +157,8 @@ class TestGetPaperFallback:
     @pytest.mark.asyncio
     async def test_a_500_falls_back_to_the_versionless_id(self) -> None:
         """`cond-mat/0305062v1` 500s; `cond-mat/0305062` returns the paper."""
-        from app.clients.arxiv.parser import render_feed_xml
-        from app.infra.http import HttpError
+        from paper_app.clients.arxiv.parser import render_feed_xml
+        from paper_app.infra.http import HttpError
 
         error_body = render_feed_xml([self._entry("cond-mat/0305062v1")]).encode()
         ok_body = render_feed_xml([self._entry("cond-mat/0305062v4")]).encode()
@@ -179,8 +179,8 @@ class TestGetPaperFallback:
 
                 return R()
 
-        from app.clients.arxiv.client import ArxivClient
-        from app.config import get_settings
+        from paper_app.clients.arxiv.client import ArxivClient
+        from paper_app.config import get_settings
 
         fetcher = Flaky()
         client = ArxivClient(get_settings().arxiv, fetcher)
@@ -193,7 +193,7 @@ class TestGetPaperFallback:
     @pytest.mark.asyncio
     async def test_an_unpublished_version_falls_back_too(self) -> None:
         """`solv-int/9712001v2` was never published; v1 exists."""
-        from app.clients.arxiv.parser import render_feed_xml
+        from paper_app.clients.arxiv.parser import render_feed_xml
 
         empty = render_feed_xml([], total=0).encode()
         found = render_feed_xml([self._entry("solv-int/9712001v1")]).encode()
@@ -207,7 +207,7 @@ class TestGetPaperFallback:
 
     @pytest.mark.asyncio
     async def test_no_version_means_no_second_request(self) -> None:
-        from app.clients.arxiv.parser import render_feed_xml
+        from paper_app.clients.arxiv.parser import render_feed_xml
 
         client, fetcher = self._client(
             bodies=[render_feed_xml([self._entry("cond-mat/0404680v1")]).encode()]
@@ -218,14 +218,14 @@ class TestGetPaperFallback:
     @pytest.mark.asyncio
     async def test_a_404_is_not_swallowed(self) -> None:
         """Only a 500 is retried; a genuine 404 must surface."""
-        from app.infra.http import HttpError
+        from paper_app.infra.http import HttpError
 
         class Failing:
             async def get_text(self, url, params=None, **kw):  # noqa: ANN001, ANN003
                 raise HttpError("gone", status_code=404)
 
-        from app.clients.arxiv.client import ArxivClient
-        from app.config import get_settings
+        from paper_app.clients.arxiv.client import ArxivClient
+        from paper_app.config import get_settings
 
         client = ArxivClient(get_settings().arxiv, Failing())
         with pytest.raises(HttpError):

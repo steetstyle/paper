@@ -16,13 +16,13 @@ import pytest
 from test_mcp import call
 from test_pipeline_e2e import PAPER_HTML, FakeContentFetcher, FakeHttp
 
-from app.clients.arxiv.filters import search_query_from
-from app.container import set_container
-from app.db.session import dispose_engines
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.infra.storage import LocalBlobStore
-from app.main import create_app
+from paper_app.clients.arxiv.filters import search_query_from
+from paper_app.container import set_container
+from paper_app.db.session import dispose_engines
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.infra.storage import LocalBlobStore
+from paper_app.main import create_app
 
 
 class StubExtractor:
@@ -32,14 +32,14 @@ class StubExtractor:
         return {"stub": "stub (fake)"}
 
     async def extract_pdf(self, path: Path):  # noqa: ARG002
-        from app.clients.content.mineru import ExtractionError
+        from paper_app.clients.content.mineru import ExtractionError
 
         raise ExtractionError("unused")
 
 
 @pytest.fixture
 def container(settings, tmp_path: Path):  # noqa: ANN201
-    from app.container import Container
+    from paper_app.container import Container
 
     settings.chunking = settings.chunking.model_copy(
         update={"max_tokens": 80, "overlap_tokens": 15, "min_tokens": 5}
@@ -77,7 +77,7 @@ async def api_client(container):  # noqa: ANN201
 
 @pytest.fixture
 def mcp_server(container, monkeypatch):  # noqa: ANN201
-    from app.mcp import server as mod
+    from paper_app.mcp import server as mod
 
     monkeypatch.setattr(mod, "get_container", lambda _s=None: container)
     return mod.server
@@ -91,7 +91,7 @@ def cli_query(*args: str) -> str:
     """
     from typer.testing import CliRunner
 
-    from app.cli import app
+    from paper_app.cli import app
 
     result = CliRunner().invoke(app, ["search", *args, "--show-query"])
     assert result.exit_code == 0, result.output
@@ -102,14 +102,14 @@ def cli_json(container, monkeypatch, *args: str) -> dict[str, Any]:  # noqa: ANN
     """Run a real `paper search --json` against the test container.
 
     The command imports `get_container` lazily inside its body, so the patch has
-    to land on `app.container` rather than on `app.cli`.
+    to land on `paper_app.container` rather than on `paper_app.cli`.
     """
     from typer.testing import CliRunner
 
-    from app.cli import app
-    from app.container import get_container
+    from paper_app.cli import app
+    from paper_app.container import get_container
 
-    monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+    monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
     assert get_container() is container
     result = CliRunner().invoke(app, ["search", *args, "--json"])
     assert result.exit_code == 0, result.output
@@ -308,7 +308,7 @@ class TestValidationParity:
     def test_cli_rejects_an_unknown_field_prefix(self) -> None:
         from typer.testing import CliRunner
 
-        from app.cli import app
+        from paper_app.cli import app
 
         result = CliRunner().invoke(app, ["search", "keyword:x", "--show-query"])
         assert result.exit_code == 2
@@ -333,7 +333,7 @@ class TestValidationParity:
     def test_cli_rejects_an_unknown_operator(self) -> None:
         from typer.testing import CliRunner
 
-        from app.cli import app
+        from paper_app.cli import app
 
         result = CliRunner().invoke(app, ["search", "--title", "x", "--op", "XOR"])
         assert result.exit_code == 2
@@ -365,7 +365,7 @@ class TestLowercaseOperatorWarningParity:
     def test_cli_warns(self) -> None:
         from typer.testing import CliRunner
 
-        from app.cli import app
+        from paper_app.cli import app
 
         result = CliRunner().invoke(app, ["search", self.QUERY, "--show-query"])
         assert "UPPERCASE" in result.output
@@ -427,7 +427,7 @@ class TestHarvestUsesTheSameFilter:
     def test_harvest_exposes_the_same_filter_flags(self) -> None:
         from typer.testing import CliRunner
 
-        from app.cli import app
+        from paper_app.cli import app
 
         def flags(command: str) -> set[str]:
             result = CliRunner().invoke(app, [command, "--help"])
@@ -453,7 +453,7 @@ class TestHarvestUsesTheSameFilter:
     def test_harvest_rejects_a_broken_filter_before_ingesting(self) -> None:
         from typer.testing import CliRunner
 
-        from app.cli import app
+        from paper_app.cli import app
 
         result = CliRunner().invoke(app, ["harvest", "keyword:x"])
         assert result.exit_code == 2

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.mcp.devices import (
+from paper_app.mcp.devices import (
     ACCEPTED_DEVICES,
     DEVICES,
     INDEXED_DEVICES,
@@ -87,7 +87,7 @@ class TestParityWithTheOtherSurfaces:
         "value", ["cpu", "cuda", "cuda:1", "mps", "npu", "1", "CUDA:2", "cud", "", "cpu:0"]
     )
     def test_the_http_parser_agrees(self, value: str) -> None:
-        from app.api.devices import parse_device as http_parse  # noqa: PLC0415
+        from paper_app.api.devices import parse_device as http_parse  # noqa: PLC0415
 
         def outcome(parser, argument: str) -> str:  # noqa: ANN001, ANN202
             try:
@@ -102,7 +102,7 @@ class TestParityWithTheOtherSurfaces:
         a divergence fails here rather than in a user's terminal."""
         import typer  # noqa: PLC0415
 
-        from app.cli import _device  # noqa: PLC0415
+        from paper_app.cli import _device  # noqa: PLC0415
 
         def outcome(argument: str) -> str:  # noqa: ANN202
             try:
@@ -129,7 +129,7 @@ class TestProviderSelection:
         """Asserted on the cache key rather than the provider's device: the test
         container's provider is the hashing one, which has no device at all, and
         the key is the actual contract."""
-        from app.config import get_settings  # noqa: PLC0415
+        from paper_app.config import get_settings  # noqa: PLC0415
 
         space = container.default_space
         container.provider_for(space)  # noqa: SLF001 - populates the cache
@@ -200,7 +200,7 @@ class TestMineruOptionsCarryADevice:
     def test_the_extraction_device_is_a_per_document_option(self) -> None:
         """Separate from the embedding device on purpose: a scanned textbook wants
         the GPU for the layout model while its query embedding stays on CPU."""
-        from app.domain.models import MineruOptions  # noqa: PLC0415
+        from paper_app.domain.models import MineruOptions  # noqa: PLC0415
 
         options = MineruOptions(device="cuda")
         assert options.has_overrides
@@ -209,9 +209,9 @@ class TestMineruOptionsCarryADevice:
     def test_the_extractor_is_told(self) -> None:
         """It reaches MinerU's settings, which is the only place a device can
         actually take effect."""
-        from app.clients.content.mineru import ExtractRequest  # noqa: PLC0415
-        from app.config import MineruSettings  # noqa: PLC0415
-        from app.domain.models import MineruOptions  # noqa: PLC0415
+        from paper_app.clients.content.mineru import ExtractRequest  # noqa: PLC0415
+        from paper_app.config import MineruSettings  # noqa: PLC0415
+        from paper_app.domain.models import MineruOptions  # noqa: PLC0415
 
         settings = ExtractRequest(options=MineruOptions(device="cuda")).settings_for(
             MineruSettings()

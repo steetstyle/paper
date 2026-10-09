@@ -18,23 +18,23 @@ from typing import Any
 import pytest
 from sqlalchemy import func, select
 
-from app.clients.content.references import (
+from paper_app.clients.content.references import (
     extract_references,
     extract_references_from_text,
     summarise,
 )
-from app.db.models import Paper, PaperAuthor, PaperCategory, PaperReference, ProjectPaper
-from app.db.project_repository import (
+from paper_app.db.models import Paper, PaperAuthor, PaperCategory, PaperReference, ProjectPaper
+from paper_app.db.project_repository import (
     ProjectConflictError,
     ProjectRepository,
     normalize_arxiv_reference,
     slugify,
 )
-from app.db.reference_repository import ReferenceRepository, normalize_arxiv_id
-from app.db.repositories import PaperRepository
-from app.db.session import get_session_factory
-from app.domain.models import Author as AuthorSpec
-from app.domain.models import PaperMetadata
+from paper_app.db.reference_repository import ReferenceRepository, normalize_arxiv_id
+from paper_app.db.repositories import PaperRepository
+from paper_app.db.session import get_session_factory
+from paper_app.domain.models import Author as AuthorSpec
+from paper_app.domain.models import PaperMetadata
 
 
 def metadata(
@@ -168,7 +168,7 @@ class TestReferenceExtraction:
         assert summarise(extract_references(BIB_HTML)) == {"total": 3, "with_arxiv_id": 3}
 
     def test_label_degrades_gracefully(self) -> None:
-        from app.domain.models import Reference
+        from paper_app.domain.models import Reference
 
         assert Reference(raw_text="x", ordinal=1).label() == "? — x"
 
@@ -371,7 +371,7 @@ class TestProjects:
 
     async def test_unknown_project_raises(self, repo) -> None:  # noqa: ANN001
         async with repo() as db:
-            from app.db.project_repository import PaperNotFoundError
+            from paper_app.db.project_repository import PaperNotFoundError
 
             with pytest.raises(PaperNotFoundError):
                 await ProjectRepository(db).require("nope")

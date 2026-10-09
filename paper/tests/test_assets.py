@@ -24,14 +24,14 @@ from typing import Any
 
 import pytest
 
-from app.clients.content.assets import (
+from paper_app.clients.content.assets import (
     Assets,
     extract_assets_from_html,
     extract_assets_from_mineru,
     strip_display_delimiters,
 )
-from app.db.asset_repository import AssetRepository, _table_shape
-from app.db.session import get_session_factory
+from paper_app.db.asset_repository import AssetRepository, _table_shape
+from paper_app.db.session import get_session_factory
 
 PAGE_URL = "https://arxiv.org/html/1706.03762v7"
 
@@ -329,7 +329,7 @@ class TestStorage:
     async def test_images_are_hashed_into_the_blob_store(
         self, repo, mineru_dir: Path, settings, tmp_path: Path
     ) -> None:  # noqa: ANN001
-        from app.infra.storage import LocalBlobStore
+        from paper_app.infra.storage import LocalBlobStore
 
         async with repo() as db:
             paper_id = await _seed_paper(db)
@@ -376,9 +376,9 @@ class TestStorage:
 
 
 async def _seed_paper(db, arxiv_id: str = "1706.03762") -> str:  # noqa: ANN001
-    from app.db.repositories import PaperRepository
-    from app.domain.models import Author as AuthorSpec
-    from app.domain.models import PaperMetadata
+    from paper_app.db.repositories import PaperRepository
+    from paper_app.domain.models import Author as AuthorSpec
+    from paper_app.domain.models import PaperMetadata
 
     paper = await PaperRepository(db).upsert(
         PaperMetadata(

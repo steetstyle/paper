@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from app.clients.content import mineru_resolver as resolver
-from app.clients.content.mineru import MineruCliBackend, MineruPythonApiBackend
-from app.clients.content.mineru_resolver import GENERATION_1, GENERATION_2, GENERATION_4
-from app.config import MineruSettings
+from paper_app.clients.content import mineru_resolver as resolver
+from paper_app.clients.content.mineru import MineruCliBackend, MineruPythonApiBackend
+from paper_app.clients.content.mineru_resolver import GENERATION_1, GENERATION_2, GENERATION_4
+from paper_app.config import MineruSettings
 
 pytestmark = pytest.mark.usefixtures("_clear_resolver_cache")
 
@@ -136,7 +136,7 @@ class TestRealCli:
 
 class TestNoBackendAvailable:
     async def test_clear_error_names_the_install_options(self) -> None:
-        from app.clients.content.mineru import ExtractionError, MineruExtractor
+        from paper_app.clients.content.mineru import ExtractionError, MineruExtractor
 
         extractor = MineruExtractor(MineruSettings(backend_order=["python_api", "cli"]))
         if extractor.available_backends:

@@ -25,7 +25,7 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
-from app.db.models import Base
+from paper_app.db.models import Base
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 TEST_PG_URL = os.environ.get("TEST_PG_URL", "")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.clients.content.html_extractor import (
+from paper_app.clients.content.html_extractor import (
     _normalise_heading_levels,
     extract_title,
     html_to_markdown,

@@ -31,14 +31,14 @@ Imports flow strictly downward; nothing below knows about anything above it.
 
 | Layer | Responsibility | Modules |
 |---|---|---|
-| `api`, `cli` | Transport | `app/api/**`, `app/cli.py` |
-| `services` | Use cases | `app/services/**` |
-| `pipeline` | Step orchestration | `app/pipeline/**` |
-| `clients`, `embeddings`, `db` | Integration | `app/clients/**`, `app/embeddings/**`, `app/db/**` |
-| `domain` | Pure data + rules | `app/domain/**` |
-| `infra` | Transport & storage plumbing | `app/infra/**` |
+| `api`, `cli` | Transport | `paper_app/api/**`, `paper_app/cli.py` |
+| `services` | Use cases | `paper_app/services/**` |
+| `pipeline` | Step orchestration | `paper_app/pipeline/**` |
+| `clients`, `embeddings`, `db` | Integration | `paper_app/clients/**`, `paper_app/embeddings/**`, `paper_app/db/**` |
+| `domain` | Pure data + rules | `paper_app/domain/**` |
+| `infra` | Transport & storage plumbing | `paper_app/infra/**` |
 
-`app/container.py` is the composition root — the single place where concrete
+`paper_app/container.py` is the composition root — the single place where concrete
 implementations are chosen. Everything else takes its collaborators through
 constructor injection, which is what makes the whole stack testable with fakes.
 
@@ -840,7 +840,7 @@ The extraction device is separate on purpose: a scanned textbook wants the GPU f
 its layout models while its query embedding stays on CPU. `--extract-device`
 reaches `MinerU`, `--device` reaches the embedding model.
 
-**One rule, three doors.** `app/domain/devices.py` owns what a device string may
+**One rule, three doors.** `paper_app/domain/devices.py` owns what a device string may
 say; the CLI, the HTTP layer and the MCP server are thin adapters over it. This was
 not the original shape — the two agents that built the HTTP and MCP halves each
 wrote their own parser, and the parity test failed on the first run over nothing
@@ -982,7 +982,7 @@ which is what `paper doctor`, `paper ingest` and `paper ask` use as-is.
 
 MinerU converts the PDF into layout-aware Markdown. It has renamed itself and
 moved its API twice, so the integration **probes what is installed and adapts**
-(`app/clients/content/mineru_resolver.py`):
+(`paper_app/clients/content/mineru_resolver.py`):
 
 | Generation | Python package / CLI | Python entry points | CLI shape |
 |---|---|---|---|
@@ -1584,8 +1584,8 @@ The pipeline is designed to never lose a paper:
 ## Layout
 
 ```
-backend/
-├── app/
+paper/
+├── paper_app/
 │   ├── api/            # FastAPI routes, schemas, dependencies
 │   ├── clients/        # arxiv/ (Atom), content/ (fetcher, MinerU, html, references, assets)
 │   ├── config.py       # typed settings

@@ -23,14 +23,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.db.base import Base
-from app.db.models import Chunk, PaperAuthor, PaperCategory
-from app.db.repositories import PaperRepository
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store.base import VectorFilter
-from app.db.vector_store.pgvector_store import PgVectorStore
-from app.domain.models import Author as AuthorSpec
-from app.domain.models import PaperMetadata
+from paper_app.db.base import Base
+from paper_app.db.models import Chunk, PaperAuthor, PaperCategory
+from paper_app.db.repositories import PaperRepository
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store.base import VectorFilter
+from paper_app.db.vector_store.pgvector_store import PgVectorStore
+from paper_app.domain.models import Author as AuthorSpec
+from paper_app.domain.models import PaperMetadata
 
 # Empty string rather than None, so the type is str and mypy stays quiet; the
 # skipif below is what actually gates the run.
@@ -148,7 +148,7 @@ async def seed_paper(  # noqa: ANN202
         # the chunk row must be visible outside this transaction or the FK fails.
         await session.commit()
 
-        from app.domain.models import VectorRecord
+        from paper_app.domain.models import VectorRecord
 
         store = PgVectorStore(factory, SPACE)
         await store.upsert(

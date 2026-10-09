@@ -16,7 +16,7 @@ import pytest
 import typer
 from typer.main import get_command
 
-from app.cli import READ_ONLY_COMMANDS, app
+from paper_app.cli import READ_ONLY_COMMANDS, app
 
 
 def _all_commands(group, prefix: str = "") -> dict[str, object]:  # noqa: ANN001
@@ -120,7 +120,7 @@ class TestRefusal:
         """Called with no arguments on purpose: the guard fires before the
         signature is ever satisfied, which is exactly the claim — refused first,
         work never started."""
-        from app.cli import read_mode  # noqa: PLC0415
+        from paper_app.cli import read_mode  # noqa: PLC0415
 
         command = ALL_COMMANDS[path]
         read_mode(True)
@@ -158,7 +158,7 @@ class TestConditionalWriters:
     def test_the_dry_run_is_allowed_and_the_apply_is_not(self) -> None:
         """Exercised on a stand-in rather than on the real commands, which would
         open a database. What is under test is the guard, not the report."""
-        from app.cli import read_mode, writes_when  # noqa: PLC0415
+        from paper_app.cli import read_mode, writes_when  # noqa: PLC0415
 
         ran: list[bool] = []
 
@@ -177,7 +177,7 @@ class TestConditionalWriters:
         assert caught.value.exit_code == 3
 
     def test_outside_read_mode_the_flag_writes_normally(self) -> None:
-        from app.cli import writes_when  # noqa: PLC0415
+        from paper_app.cli import writes_when  # noqa: PLC0415
 
         ran: list[bool] = []
 
@@ -202,7 +202,7 @@ class TestConditionalWriters:
         assert "--read-only" in opts
 
     def test_the_flag_sets_the_mode_and_clears_again(self) -> None:
-        from app.cli import _global_options, is_read_only, read_mode  # noqa: PLC0415
+        from paper_app.cli import _global_options, is_read_only, read_mode  # noqa: PLC0415
 
         assert is_read_only() is False
         try:
@@ -224,7 +224,7 @@ class TestConditionalWriters:
     def test_the_guard_raises_before_any_work(self) -> None:
         """The point of the mode: refused *before* the command does anything, so
         a half-applied write is not possible."""
-        from app.cli import _refuse, read_mode  # noqa: PLC0415
+        from paper_app.cli import _refuse, read_mode  # noqa: PLC0415
 
         read_mode(True)
         try:
@@ -235,7 +235,7 @@ class TestConditionalWriters:
         assert caught.value.exit_code == 3
 
     def test_nothing_is_written_when_refused(self, capsys) -> None:  # noqa: ANN001
-        from app.cli import _refuse, read_mode  # noqa: PLC0415
+        from paper_app.cli import _refuse, read_mode  # noqa: PLC0415
 
         read_mode(True)
         try:
@@ -248,7 +248,7 @@ class TestConditionalWriters:
         assert "Nothing was modified" in out
 
     def test_read_mode_off_is_the_default(self) -> None:
-        from app.cli import is_read_only  # noqa: PLC0415
+        from paper_app.cli import is_read_only  # noqa: PLC0415
 
         assert is_read_only() is False
 
@@ -257,7 +257,7 @@ class TestMarking:
     def test_marking_twice_is_an_error(self) -> None:
         """Two markers on one command means one of them was meant for something
         else, and the second would be silently ignored."""
-        from app.cli import writes  # noqa: PLC0415
+        from paper_app.cli import writes  # noqa: PLC0415
 
         @writes("thing")
         def once() -> None:

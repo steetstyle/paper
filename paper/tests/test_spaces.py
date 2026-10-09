@@ -9,22 +9,22 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
-from app.db.space_repository import EmbeddingSpaceRepository, SpaceConflictError
-from app.db.spaces import (
+from paper_app.db.space_repository import EmbeddingSpaceRepository, SpaceConflictError
+from paper_app.db.spaces import (
     DEFAULT_SPACE_NAME,
     LEGACY_TABLE_NAME,
     EmbeddingSpace,
     assert_distinct,
     slugify,
 )
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.db.vector_store.schema import (
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.db.vector_store.schema import (
     ddl_statements,
     embedding_table,
     ensure_space_table,
     known_tables,
 )
-from app.domain.models import VectorRecord
+from paper_app.domain.models import VectorRecord
 
 
 @pytest.fixture
@@ -219,7 +219,7 @@ class TestSpaceRegistry:
         """create_all seeds the registry, so clear it to exercise this path."""
         from sqlalchemy import delete
 
-        from app.db.models import EmbeddingSpaceRecord
+        from paper_app.db.models import EmbeddingSpaceRecord
 
         repo = EmbeddingSpaceRepository(session)
         fallback = EmbeddingSpace(name="default", provider="p", model="m", dimensions=64)
@@ -231,7 +231,7 @@ class TestSpaceRegistry:
     async def test_resolve_without_fallback_or_registry_raises(self, session) -> None:
         from sqlalchemy import delete
 
-        from app.db.models import EmbeddingSpaceRecord
+        from paper_app.db.models import EmbeddingSpaceRecord
 
         await session.execute(delete(EmbeddingSpaceRecord))
         with pytest.raises(SpaceConflictError, match="no embedding space registered"):

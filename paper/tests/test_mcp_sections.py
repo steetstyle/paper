@@ -30,9 +30,9 @@ from typing import Any
 import pytest
 from sqlalchemy import event
 
-from app.domain.enums import ChunkKind
-from app.domain.models import ContentSource, PaperMetadata, TextChunk
-from app.services.sections import Section
+from paper_app.domain.enums import ChunkKind
+from paper_app.domain.models import ContentSource, PaperMetadata, TextChunk
+from paper_app.services.sections import Section
 from tests.test_mcp import acall, call
 
 pytest_plugins = ("test_mcp",)
@@ -76,7 +76,7 @@ CHUNKS = [
 
 async def seed_book(container, doc_key: str = DOC_KEY) -> str:  # noqa: ANN001
     """A textbook in the corpus: sections, page ranges, and stored chunks."""
-    from app.db.repositories import ChunkRepository, PaperRepository, SectionRepository
+    from paper_app.db.repositories import ChunkRepository, PaperRepository, SectionRepository
 
     async with container.session_factory() as session:
         paper = await PaperRepository(session).upsert(
@@ -132,7 +132,7 @@ def count_chunk_queries(container) -> Any:  # noqa: ANN401
     repository method: the point of the assertion is what the database is asked,
     not which object asked it.
     """
-    from app.db.session import get_engine
+    from paper_app.db.session import get_engine
 
     seen: list[str] = []
     engine = get_engine(container.settings.database).sync_engine

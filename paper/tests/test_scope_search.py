@@ -22,21 +22,21 @@ from test_filter_parity import StubExtractor
 from test_mcp import acall
 from test_pipeline_e2e import FakeContentFetcher, FakeHttp
 
-from app.container import Container, set_container
-from app.db.models import Chunk, ProjectPaper
-from app.db.project_repository import ProjectRepository
-from app.db.repositories import ChunkRepository, PaperRepository
-from app.db.session import dispose_engines, get_session_factory
-from app.db.spaces import EmbeddingSpace
-from app.db.vector_store import schema
-from app.db.vector_store.memory_store import InMemoryVectorStore
-from app.domain.enums import ChunkKind
-from app.domain.models import Author, PaperMetadata
-from app.embeddings.hashing_provider import HashingEmbeddingProvider
-from app.infra.storage import LocalBlobStore
-from app.main import create_app
-from app.services.reembed import ReembedService
-from app.services.semantic_search import SemanticSearchService
+from paper_app.container import Container, set_container
+from paper_app.db.models import Chunk, ProjectPaper
+from paper_app.db.project_repository import ProjectRepository
+from paper_app.db.repositories import ChunkRepository, PaperRepository
+from paper_app.db.session import dispose_engines, get_session_factory
+from paper_app.db.spaces import EmbeddingSpace
+from paper_app.db.vector_store import schema
+from paper_app.db.vector_store.memory_store import InMemoryVectorStore
+from paper_app.domain.enums import ChunkKind
+from paper_app.domain.models import Author, PaperMetadata
+from paper_app.embeddings.hashing_provider import HashingEmbeddingProvider
+from paper_app.infra.storage import LocalBlobStore
+from paper_app.main import create_app
+from paper_app.services.reembed import ReembedService
+from paper_app.services.semantic_search import SemanticSearchService
 
 # (text, heading, kind) per paper. Covers every kind the filter can ask for.
 ALPHA: list[tuple[str, str, ChunkKind]] = [
@@ -218,7 +218,7 @@ async def api_client(container):
 
 @pytest.fixture
 def mcp_server(container, monkeypatch):
-    from app.mcp import server as mod
+    from paper_app.mcp import server as mod
 
     monkeypatch.setattr(mod, "get_container", lambda _s=None: container)
     return mod.server
@@ -448,8 +448,8 @@ class TestReembed:
         assert await store.count() == 0
 
     async def test_a_second_space_gets_its_own_vectors(self, container, corpus) -> None:  # noqa: ANN001
-        from app.db.repositories import EmbeddingRepository
-        from app.db.vector_store.schema import embedding_table, ensure_space_table
+        from paper_app.db.repositories import EmbeddingRepository
+        from paper_app.db.vector_store.schema import embedding_table, ensure_space_table
 
         factory = get_session_factory(container.settings.database)
         first = container.default_space
@@ -652,9 +652,9 @@ class TestSurfaceParity:
         import anyio
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(
             cli_app,
             [
@@ -688,9 +688,9 @@ class TestSurfaceParity:
     def test_cli_rejects_an_unknown_kind(self, container, embedded, monkeypatch) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(cli_app, ["ask", QUERY, "--content", "eqaution"])
         assert result.exit_code == 2
         assert "eqaution" in result.output
@@ -769,7 +769,7 @@ class TestVectorFilterSemantics:
     """`None` means "no filter"; an empty list means "match nothing"."""
 
     def test_empty_paper_ids_is_not_empty(self) -> None:
-        from app.db.vector_store.base import VectorFilter
+        from paper_app.db.vector_store.base import VectorFilter
 
         assert VectorFilter(paper_ids=[]).matches_nothing
         assert not VectorFilter(paper_ids=[]).is_empty()
@@ -777,13 +777,13 @@ class TestVectorFilterSemantics:
         assert not VectorFilter().matches_nothing
 
     def test_empty_kinds_is_not_empty(self) -> None:
-        from app.db.vector_store.base import VectorFilter
+        from paper_app.db.vector_store.base import VectorFilter
 
         assert VectorFilter(content_kinds=[]).matches_nothing
 
     async def test_an_explicit_empty_kind_list_widens_nothing(self, container, embedded) -> None:  # noqa: ANN001
         """`content_kinds=[]` must not read as "no filter"."""
-        from app.db.vector_store.base import VectorFilter
+        from paper_app.db.vector_store.base import VectorFilter
 
         store = container.vector_store_for(container.default_space)
         service = service_for(container)
@@ -877,9 +877,9 @@ class TestChunkKindOnReadPaths:
     def test_cli_show_filters_by_kind(self, container, corpus, monkeypatch) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(
             cli_app, ["show", "2401.00001", "-C", "equations", "-c", "20"]
         )
@@ -891,9 +891,9 @@ class TestChunkKindOnReadPaths:
     def test_cli_show_rejects_an_unknown_kind(self, container, corpus, monkeypatch) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(cli_app, ["show", "2401.00001", "-C", "eqation"])
         assert result.exit_code == 2
         assert "eqation" in result.output
@@ -901,9 +901,9 @@ class TestChunkKindOnReadPaths:
     def test_cli_ask_rejects_an_unknown_source(self, container, embedded, monkeypatch) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(cli_app, ["ask", "diffusion", "--source", "html"])
         assert result.exit_code == 2
         assert "html" in result.output
@@ -914,9 +914,9 @@ class TestChunkKindOnReadPaths:
         """Was a raw traceback out of asyncio.run; HTTP 404s and MCP errors."""
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(cli_app, ["ask", "diffusion", "--project", "nope"])
         assert result.exit_code == 2, result.output
         assert "nope" in result.output
@@ -932,7 +932,7 @@ class TestEquationSearchScope:
     @pytest.fixture(autouse=True)
     async def _equations(self, db, corpus) -> None:  # noqa: ANN001
         """One display equation per paper, so scoping is observable."""
-        from app.db.asset_models import PaperEquation
+        from paper_app.db.asset_models import PaperEquation
 
         async with db() as session:
             session.add(
@@ -995,7 +995,7 @@ class TestEquationSearchScope:
         """An empty `MatchAny` is rejected by Qdrant, so it cannot be pushed down."""
         import inspect
 
-        from app.db.vector_store.qdrant_store import QdrantVectorStore
+        from paper_app.db.vector_store.qdrant_store import QdrantVectorStore
 
         source = inspect.getsource(QdrantVectorStore.delete_for_papers)
         assert source.index("if not paper_ids") < source.index("_get_client")
@@ -1010,7 +1010,7 @@ class TestProjectWideAssets:
 
     @pytest.fixture(autouse=True)
     async def _assets(self, container, corpus) -> None:  # noqa: ANN001
-        from app.db.asset_models import PaperFigure, PaperTable
+        from paper_app.db.asset_models import PaperFigure, PaperTable
 
         factory = get_session_factory(container.settings.database)
         async with factory() as session:
@@ -1041,9 +1041,9 @@ class TestProjectWideAssets:
     def _invoke(self, container, monkeypatch, *args: str):  # noqa: ANN001, ANN202
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         return CliRunner().invoke(cli_app, ["assets", *args])
 
     def test_lists_asset_counts_per_paper(self, container, corpus, monkeypatch) -> None:  # noqa: ANN001
@@ -1089,7 +1089,7 @@ class TestProjectSession:
     def _session(container, *lines: str):  # noqa: ANN001, ANN205
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
         # No monkeypatching needed: the container fixture calls `set_container`,
         # and every command resolves `get_container` at call time.
@@ -1167,7 +1167,7 @@ class TestProjectSession:
     def test_unknown_project_exits_2(self, container) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
         result = CliRunner().invoke(cli_app, ["session", "yok-boyle"])
         assert result.exit_code == 2
@@ -1176,7 +1176,7 @@ class TestProjectSession:
     def test_no_argument_lists_projects(self, container, corpus) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
         result = CliRunner().invoke(cli_app, ["session"])
         assert result.exit_code == 1
@@ -1275,9 +1275,9 @@ class TestReembedOfflineAndScope:
     ) -> None:  # noqa: ANN001
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(
             cli_app, ["reembed", "--space", "test", "--paper", "2401.99999"]
         )
@@ -1292,9 +1292,9 @@ class TestReembedOfflineAndScope:
         from sqlalchemy import inspect as sa_inspect
         from typer.testing import CliRunner
 
-        from app.cli import app as cli_app
+        from paper_app.cli import app as cli_app
 
-        monkeypatch.setattr("app.container.get_container", lambda *a, **k: container)
+        monkeypatch.setattr("paper_app.container.get_container", lambda *a, **k: container)
         result = CliRunner().invoke(
             cli_app, ["reembed", "--space", "test", "--dry-run", "--project", corpus["project"]]
         )
@@ -1322,7 +1322,7 @@ class TestNewMcpTools:
     """
 
     async def test_search_equations_is_scoped(self, mcp_server, container, corpus) -> None:  # noqa: ANN001
-        from app.db.asset_models import PaperEquation
+        from paper_app.db.asset_models import PaperEquation
 
         factory = get_session_factory(container.settings.database)
         async with factory() as session:
@@ -1445,7 +1445,7 @@ class TestNewMcpTools:
     async def test_delete_project_keeps_the_papers(self, mcp_server, corpus) -> None:  # noqa: ANN001
         from sqlalchemy import func, select
 
-        from app.db.models import Paper
+        from paper_app.db.models import Paper
 
         body = await acall(mcp_server, "delete_project", project="sheaf-papers")
         assert body["ok"] is True, body
@@ -1481,7 +1481,7 @@ class TestMcpScopeParameters:
         assert strict["scope"]["min_score"] == 0.99
 
     async def test_list_assets_accepts_a_project(self, mcp_server, corpus) -> None:  # noqa: ANN001
-        from app.db.asset_models import PaperFigure
+        from paper_app.db.asset_models import PaperFigure
 
         factory = get_session_factory()
         async with factory() as session:

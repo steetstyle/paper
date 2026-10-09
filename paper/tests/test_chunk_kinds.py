@@ -17,9 +17,9 @@ import re
 
 import pytest
 
-from app.clients.content.html_extractor import html_to_markdown
-from app.domain.enums import ChunkKind
-from app.services.chunk_kinds import classify_chunk, merge_run, parse_kinds
+from paper_app.clients.content.html_extractor import html_to_markdown
+from paper_app.domain.enums import ChunkKind
+from paper_app.services.chunk_kinds import classify_chunk, merge_run, parse_kinds
 
 # ----------------------------------------------------------------- real corpus
 # Shapes copied verbatim from arXiv 1706.03762v7 (Attention Is All You Need),
@@ -119,8 +119,8 @@ class TestClassifyChunk:
 
     def test_abstract_chunk_is_abstract_whatever_the_text(self) -> None:
         """A metadata-only chunk is the abstract by definition, not by shape."""
-        from app.config import ChunkingSettings
-        from app.services.chunker import ChunkingService
+        from paper_app.config import ChunkingSettings
+        from paper_app.services.chunker import ChunkingService
 
         chunker = ChunkingService(ChunkingSettings(max_tokens=80, overlap_tokens=15))
         chunks = chunker.chunk_abstract("A Paper", "| a | b |\n| --- | --- |\n| 1 | 2 |")

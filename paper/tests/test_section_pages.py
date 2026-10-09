@@ -19,13 +19,13 @@ website changing rather than needing a blocklist.
 
 from __future__ import annotations
 
-from app.db.models import DocumentSection, Paper
-from app.db.session import get_session_factory
-from app.services.section_prune import (
+from paper_app.db.models import DocumentSection, Paper
+from paper_app.db.session import get_session_factory
+from paper_app.services.section_prune import (
     documents_with_unplaceable_sections,
     prune_unplaceable_sections,
 )
-from app.services.sections import build_sections
+from paper_app.services.sections import build_sections
 
 #: arXiv's abs-page furniture, verbatim from the bug report.
 ARXIV_CHROME = [
@@ -74,7 +74,7 @@ class TestOnlyNavigableSectionsSurvive:
         """Bookmarks always carry pages, so this exercises the markdown half —
         but the filter is applied to the merged list, not per source, which is
         what stops a chrome heading attaching itself to a real chapter."""
-        from app.clients.content.pdf_info import OutlineNode  # noqa: PLC0415
+        from paper_app.clients.content.pdf_info import OutlineNode  # noqa: PLC0415
 
         outline = (OutlineNode(title="1 Overview", depth=0, page=10),)
         markdown = "# Submission history\n\nbody."
@@ -83,7 +83,7 @@ class TestOnlyNavigableSectionsSurvive:
 
 
 def _map(blocks):  # noqa: ANN001, ANN202
-    from app.services.page_map import build_page_map  # noqa: PLC0415
+    from paper_app.services.page_map import build_page_map  # noqa: PLC0415
 
     return build_page_map(blocks)
 
@@ -184,10 +184,10 @@ class TestTheStepRefusesHtmlEntirely:
         """The step says *why* rather than reporting "no structure found", which
         reads like the document has none when the truth is that its headings are
         the renderer's."""
-        from app.domain.enums import ContentKind  # noqa: PLC0415
-        from app.domain.models import ContentPayload  # noqa: PLC0415
-        from app.pipeline.context import PipelineContext  # noqa: PLC0415
-        from app.pipeline.steps import BuildSectionsStep  # noqa: PLC0415
+        from paper_app.domain.enums import ContentKind  # noqa: PLC0415
+        from paper_app.domain.models import ContentPayload  # noqa: PLC0415
+        from paper_app.pipeline.context import PipelineContext  # noqa: PLC0415
+        from paper_app.pipeline.steps import BuildSectionsStep  # noqa: PLC0415
 
         async with get_session_factory()() as session:
             paper = Paper(doc_key="html-doc", kind="paper", title="T", abstract="")
@@ -232,9 +232,9 @@ class TestOutlineSaysWhichReason:
         from click.testing import CliRunner  # noqa: PLC0415
         from typer.main import get_command  # noqa: PLC0415
 
-        from app.cli import app  # noqa: PLC0415
-        from app.db.models import DocumentSection, RawDocument  # noqa: PLC0415
-        from app.db.session import get_session_factory  # noqa: PLC0415
+        from paper_app.cli import app  # noqa: PLC0415
+        from paper_app.db.models import DocumentSection, RawDocument  # noqa: PLC0415
+        from paper_app.db.session import get_session_factory  # noqa: PLC0415
 
         async def seed() -> None:
             async with get_session_factory()() as session:

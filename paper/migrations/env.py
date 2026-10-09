@@ -1,6 +1,6 @@
 """Alembic environment.
 
-By default the URL comes from ``app.config`` so migrations and the app can never
+By default the URL comes from ``paper_app.config`` so migrations and the app can never
 disagree about which database they target.
 
 ``MIGRATION_DATABASE_URL`` overrides that. Alembic has no way to pass a value
@@ -23,9 +23,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.config import get_settings  # noqa: E402
-from app.db.models import Base  # noqa: E402
-from app.db.session import ensure_sqlite_directory  # noqa: E402
+from paper_app.config import get_settings  # noqa: E402
+from paper_app.db.models import Base  # noqa: E402
+from paper_app.db.session import ensure_sqlite_directory  # noqa: E402
 
 config = context.config
 

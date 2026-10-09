@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.ids import (
+from paper_app.domain.ids import (
     normalize_arxiv_id,
     parse_arxiv_id,
     url_for_ar5iv,
