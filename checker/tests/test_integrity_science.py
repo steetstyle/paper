@@ -165,6 +165,76 @@ def test_the_default_limit_holds_a_real_thesis() -> None:
     assert CheckerSettings.model_fields["max_chars"].default >= 466_068
 
 
+def test_a_maths_operator_is_not_an_emoji() -> None:
+    """U+2700-U+27BF is decoration, which is exactly why TeX put the box there.
+
+    Measured on arXiv:q-alg/9607022, a 1996 habilitation thesis: the Klein-Gordon
+    d'Alembertian came through as U+2737 and the check reported **231** emoji,
+    one for every occurrence of the symbol in "(□ + m²)φ = 0" - the equation the
+    chapter is about.
+    """
+    box = "✷"  # U+2737, the box operator in a TeX font's Dingbats slot
+    report = check_integrity(PROSE + f"(□ +m2)φ = 0 ⇒ ({box} +m2)φ = 0." + PROSE)
+    assert not [f for f in report.findings if f.code == "emoji"], report.findings
+    assert not report.tampered
+
+
+def test_a_real_emoji_is_still_noticed() -> None:
+    """The narrowed range must not become "never report an emoji"."""
+    rocket = "🚀"
+    report = check_integrity(f"Bu çalışmada {rocket} sonuçlar elde edildi ve tartışıldı.")
+    assert "emoji" in {f.code for f in report.findings}
+
+
+def test_path_integral_ellipses_are_not_punctuation_manipulation() -> None:
+    """Maths, and the rule that had to learn to leave it alone."""
+    report = check_integrity(
+        PROSE + "G(x1,...,xn) = < 0|T [φ(y1)...φ(xm)]|0> with ∫d4y1...d4ym over R^n."
+    )
+    assert "repeat_punctuation" not in {f.code for f in report.findings}
+    assert not report.tampered
+
+
+def test_a_signature_dot_line_is_not_punctuation_manipulation() -> None:
+    """Measured on arXiv:1702.04123: a declaration page carrying thirty-six dots
+    for a date to be signed. Long, but it is a form, not a quotation."""
+    report = check_integrity(
+        PROSE + "December 12, 2016 .................................... ..........."
+    )
+    assert not report.tampered
+
+
+def test_an_entry_spanning_a_page_break_is_not_cut_in_half() -> None:
+    """A three-character gap is a page break, not a record boundary.
+
+    Measured on arXiv:q-alg/9607022: PDF text is emitted as "\\n\\f\\n" between
+    pages, and "B.W. Lee, in Methods in Field Theory, ed. R." / "Delbourgo, D.
+    Kreimer, Phys.Lett.B366 (1996) 421" are one entry. Split there, the year sits
+    in the half that gets thrown away.
+    """
+    from checker_app.services.references import _PAGE_BREAK_GAP
+
+    assert _PAGE_BREAK_GAP == 3
+
+
+def test_older_pdfs_space_their_digits() -> None:
+    """"Phys.Lett.B366 (1 996) 421" is a 1996 paper, not a yearless one."""
+    from checker_app.services.references import (
+        _IDENTIFIER_RE,
+        _SPLIT_DIGITS_RE,
+        _YEAR_RE,
+    )
+
+    text = "Delbourgo, D. Kreimer, Phys.Lett.B366 (1 996) 421."
+    prose = _IDENTIFIER_RE.sub(" ", text)
+    assert _YEAR_RE.findall(prose) == []
+    joined = _SPLIT_DIGITS_RE.sub("", prose)
+    assert _YEAR_RE.findall(joined)[-1] == "1996"
+    # Safe for a real page range: rejoined it is eight digits, and no four-digit
+    # pattern matches that.
+    assert _YEAR_RE.findall(_SPLIT_DIGITS_RE.sub("", "pp. 1415 1443, 1999.")) == ["1999"]
+
+
 # ------------------------------------------------------------- the whole doc
 def test_a_physics_thesis_is_not_declared_tampered() -> None:
     """The end-to-end property: no false alarm on 60,000 words of science."""

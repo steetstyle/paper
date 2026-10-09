@@ -90,7 +90,17 @@ _CONFUSABLES = str.maketrans(
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 _REPEAT_PUNCT_RE = re.compile(r"([!?.,;:])\1{2,}")
-_EMOJI_RE = re.compile("[\U0001f300-\U0001faff☀-➿]")
+#: Emoji, but not the Dingbats block.
+#:
+#: U+2700-U+27BF was allocated for decoration, which is exactly why TeX put the
+#: box operator there: measured on arXiv:q-alg/9607022, a 1996 habilitation
+#: thesis, the Klein-Gordon d'Alembertian came through as U+2737 and this check
+#: reported **231** emoji - every occurrence of the symbol in the equation
+#: "(□ + m²)φ = 0", which is the equation the chapter is about.
+#:
+#: U+1F300-U+1FAFF and the Miscellaneous Symbols block are genuinely pictographic
+#: in a document and worth noting; Dingbats is a maths font's territory.
+_EMOJI_RE = re.compile("[\U0001f300-\U0001faff☀-⚿⬀-⯿]")
 
 
 def _neighbours(text: str, match: re.Match[str]) -> str:

@@ -529,6 +529,59 @@ Türkçe harfler de kapsama alındı: `K A Y N A K Ç A` de aynı artefakttır.
   başlık ölçüsündeki liste satırları. Bunlar `review` olarak **işaretlenmiyor**,
   yalnızca bölüm tablosunda görünüyor.
 
+### Beşinci tur: dört tez, 1996'dan bugüne
+
+Dört matematik/fizik tezi: **math/0611002** (Imperial, K-stabilite),
+**1702.04123** (Varşova, Gysin homomorfizması), **q-alg/9607022** (1996,
+Habilitationsschrift) ve **1102.0985** (Kähler/Yang-Mills). On bir tez, sekiz
+disiplin, 86–220 sayfa, **dokuz farklı şablon ailesi** — 1996 TeX'ten bugünkü
+MS Word'a.
+
+| tez | şablon | sayfa | sözcük | bölüm | kaynakça |
+|---|---|---:|---:|---:|---:|
+| 1407.6566 | LaTeX | 155 | 60.238 | 85 | 112 |
+| 2306.14650 | LaTeX | 153 | 42.094 | 56 | 770 |
+| 1911.03731 | LaTeX | 120 | 45.889 | 72 | 60 |
+| 0911.2782 | LaTeX | 153 | 52.620 | 96 | 561 |
+| 1912.04141 | LaTeX | 192 | 78.422 | 91 | 930 |
+| 1706.08318 | LaTeX | 187 | 57.481 | 132 | 418 |
+| 2203.03469 | **MS Word** | 220 | 79.385 | 27 | 2.302 |
+| math/0611002 | 1990s LaTeX | 88 | 29.091 | 44 | 60 |
+| 1702.04123 | LaTeX | 86 | 27.787 | 17 | 187 |
+| q-alg/9607022 | **1996 TeX** | 103 | 35.373 | 29 | 211 |
+| 1102.0985 | LaTeX | 121 | 54.432 | 13 | 100 |
+
+#### Bir fiziksel operatör emoji sanıldı — 231 kez
+
+1996 tezinde `emoji` sayısı **231**'di. İncelendiğinde hepsi aynı karakter:
+**Klein-Gordon d'Alembertian işareti `□`**. TeX fontları bu operatörü
+**Dingbats** bloğundaki (U+2700–U+27BF) bir koda yerleştiriyor — o blok süsleme
+için ayrılmıştı, TeX oraya matematiği koydu.
+
+Denklem `(□ + m²)φ = 0` — yani bölümün konusu olan denklem — 231 kez "emoji"
+olarak işaretleniyordu. Menzil gerçek piktoğrafik bloklara daraltıldı
+(U+1F300–U+1FAFF ve Miscellaneous Symbols). **Kayıp:** Dingbats'taki gerçek
+emoji'ler (✅ gibi). Tezde emoji neredeyse hiç olmadığı ve bulgunun yalnızca
+bilgilendirici olduğu için kabul edilebilir bir denge — ama bu bir ödünleşmedir,
+kazanç değil.
+
+#### Eski PDF'ler rakamları boşlukla yazıyor
+
+1996 tezinde yıl **`(1 996)`** olarak geliyor. Sonuç: 85 kaydın 41'i
+"yılsız" işaretlendi. Rakamlar arasındaki boşluk kapatılıp yeniden aranıyor —
+güvenli, çünkü gerçek bir sayfa aralığı (`1415 1443`) birleşince sekiz haneli
+oluyor ve hiçbir dört haneli desen ona uymuyor.
+
+#### Sayfa sonunda bölünen kayıtlar
+
+PDF metni sayfa arasında `\n\f\n` ile üretiliyor, yani araya **3 karakter**
+giriyor; bitişiklik eşiği 2 idi. Sonuç: `B.W. Lee, in Methods in Field Theory,
+ed. R.` ile `Delbourgo, D. Kreimer, Phys.Lett.B366 (1996) 421` — **tek bir
+kayıt** — ikiye bölünüyor ve yıl atılan yarıda kalıyordu. Eşik 3'e çıkarıldı.
+
+Astrofizik tezinde `review` **2 → 1**, string kuramında **7 → 6**, yoğunlaştırılmış
+madde'de **158 → 142**.
+
 ## Söylem profili
 
 Rapor, dört ilişki sınıfını (atıf / sıralama / açımlama / neden) TR/EN
@@ -829,7 +882,7 @@ checker/
 │   ├── config.py        tüm ayarlar (env ile)
 │   └── cli.py
 ├── scripts/           bootstrap · calibrate · measure_ratio · test_mcp_stdio
-├── tests/             393 test, model indirmeden
+├── tests/             399 test, model indirmeden
 ├── LITERATURE.md      sayı → karar eşlemesi
 └── requirements.txt
 ```

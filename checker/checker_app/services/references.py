@@ -144,6 +144,16 @@ _PAREN_YEAR_RE = re.compile(r"\(((?:1[5-9]\d{2}|20[0-2]\d))\)")
 #: author-splitting pattern cut after ``[1] `` and produced entries that began
 #: mid-record, one entry's tail becoming the next entry's head.
 _NUMBERED_ENTRY_RE = re.compile(r"^\s*\[(\d{1,4})\]")
+
+#: Digits separated by whitespace, as pre-2000 PDF encoders emit them: the year
+#: of a 1996 paper arrives as "1 996".
+_SPLIT_DIGITS_RE = re.compile(r"(?<=\d)[ \t]+(?=\d)")
+
+#: The largest character gap that still means "same reference". PDF text is
+#: emitted as "\n\f\n" between pages, so three characters is a page break; a
+#: bibliographic record that wraps onto the next page was being cut in half and
+#: its year thrown away with the first half.
+_PAGE_BREAK_GAP = 3
 #: The floor for "this year cannot be real".
 #:
 #: This used to be 1950, on the assumption that a thesis cites only modern
@@ -429,10 +439,18 @@ def _entries_from_sentences(lines: Sequence[Sentence]) -> list[tuple[str, int]]:
                 flush()
             elif offset > 0 and line_start == previous_line and not current:
                 continue
+            # A gap of three characters is a page break, not a record boundary. PDF
+            # text is emitted as "\n\f\n" between pages, so a reference whose
+            # second line falls onto the next page was being cut in half. Measured
+            # on arXiv:q-alg/9607022, a 1996 habilitation thesis: "B.W. Lee, in
+            # Methods in Field Theory, ed. R." and "Delbourgo, D. Kreimer,
+            # Phys.Lett.B366 (1996) 421" are one entry, and 39 entries in that
+            # bibliography were reported as having no year because their year sat
+            # in the half that had been thrown away.
             contiguous = (
                 bool(current)
                 and paragraph == current_paragraph
-                and sentence.location.char_start - previous_end <= 2
+                and sentence.location.char_start - previous_end <= _PAGE_BREAK_GAP
             )
             if not contiguous and current:
                 flush()
@@ -511,7 +529,18 @@ def _vet(text: str, index: int, this_year: int) -> ReferenceEntry:
             # Last resort, and still the last one rather than the first: a page
             # number comes after the year in every style measured here.
             years = [int(y) for y in _YEAR_RE.findall(prose)]
-            year = years[-1] if years else None
+            if years:
+                year = years[-1]
+            else:
+                # Older PDFs space their digits. Measured on arXiv:q-alg/9607022,
+                # a 1996 habilitation thesis: "Phys.Lett.B366 (1 996) 421" arrives
+                # with the year split in half, so 44 of 85 entries were reported as
+                # having no year at all. Closing the gaps and looking again is
+                # safe for the fallback path - a real page range like "1415 1443"
+                # rejoins to eight digits, which no four-digit pattern matches.
+                joined = _SPLIT_DIGITS_RE.sub("", prose)
+                years = [int(y) for y in _YEAR_RE.findall(joined)]
+                year = years[-1] if years else None
 
     has_authors = bool(_INITIAL_RE.search(text)) or len(text.split()) >= 4
     has_venue = bool(_VENUE_HINT_RE.search(text))
