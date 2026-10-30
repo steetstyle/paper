@@ -129,6 +129,15 @@ class PipelineContext:
             raise RuntimeError("content is not set — run the fetch step first")
         return self.content
 
+    async def release_write_lock(self) -> None:
+        """Commit before a slow call so other ingests are not stuck behind it.
+
+        SQLite allows one writer. A transaction left open across an arXiv
+        download or an embedding batch is what turns a parallel ingest into
+        ``database is locked``.
+        """
+        await self.session.commit()
+
     def note(self, key: str, value: Any) -> None:
         self.facts[key] = value
 

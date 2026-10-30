@@ -136,6 +136,10 @@ class FetchContentStep(Step):
                 ctx.content_kind = ContentKind(existing.kind)
                 return StepResult.skip("already_downloaded", kind=existing.kind)
 
+        # The reuse lookup above opened a transaction. Drop it before the
+        # download; recording the payload starts a new one afterwards.
+        await ctx.release_write_lock()
+
         if ctx.local_path is not None:
             # A local file has no URL to fetch and no HTML rendering to prefer,
             # so the arXiv strategy does not apply to it at all.
@@ -235,6 +239,8 @@ class ExtractTextStep(Step):
         reused = await self._reuse_stored(ctx)
         if reused is not None:
             return reused
+
+        await ctx.release_write_lock()
 
         if content.kind == ContentKind.HTML.value:
             return await self._from_html(ctx, content)
@@ -844,7 +850,9 @@ class EmbedChunksStep(Step):
                 },
             )
 
-        vectors = await self._embed_all([row.text for row in rows])
+        texts = [row.text for row in rows]
+        await ctx.release_write_lock()
+        vectors = await self._embed_all(texts)
         bad = next((v for v in vectors if len(v) != expected), None)
         if bad is not None:
             return StepResult(

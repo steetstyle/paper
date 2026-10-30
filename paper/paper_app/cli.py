@@ -103,7 +103,7 @@ def _paper_dict(paper) -> dict[str, object]:  # noqa: ANN001 - PaperMetadata
         "arxiv_id": paper.arxiv_id,
         "versioned_id": paper.versioned_id,
         "title": paper.title,
-        "authors": list(paper.author_names),
+        "authors": paper.author_names(),
         "categories": list(paper.categories),
         "abstract": paper.abstract,
         "published": paper.published_at.isoformat() if paper.published_at else None,

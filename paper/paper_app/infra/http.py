@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import ssl
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import TracebackType
 
 import httpx
+import truststore
 from httpx._types import QueryParamTypes
 from tenacity import (
     AsyncRetrying,
@@ -21,6 +24,19 @@ from paper_app.config import ArxivSettings
 from paper_app.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Trust store for outbound HTTPS.
+
+    httpx trusts the certifi bundle only. That bundle does not contain
+    enterprise inspection CAs the operating system already trusts, so arXiv
+    lookups fail with ``CERTIFICATE_VERIFY_FAILED`` while curl succeeds.
+    ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` still win when set.
+    """
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return httpx.create_ssl_context(trust_env=True)
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 # Transient failures worth retrying; everything else surfaces immediately.
 #: Statuses worth trying again on a short exponential backoff.
@@ -122,6 +138,7 @@ class HttpFetcher:
     def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
+                verify=_ssl_context(),
                 timeout=httpx.Timeout(
                     connect=self._settings.connect_timeout_seconds,
                     read=self._settings.read_timeout_seconds,

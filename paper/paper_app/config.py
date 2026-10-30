@@ -224,8 +224,10 @@ class DatabaseSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _derive_sync_url(self) -> DatabaseSettings:
-        if not self.sync_url:
-            object.__setattr__(self, "sync_url", _to_sync_url(self.url))
+        url = _anchor_sqlite_url(self.url)
+        object.__setattr__(self, "url", url)
+        sync = self.sync_url or _to_sync_url(url)
+        object.__setattr__(self, "sync_url", _anchor_sqlite_url(sync))
         return self
 
     @property
@@ -305,6 +307,26 @@ def _to_sync_url(url: str) -> str:
         .replace("+aiosqlite", "")
         .replace("postgresql+psycopg://", "postgresql://")
     )
+
+
+def _anchor_sqlite_url(url: str) -> str:
+    """Point a relative SQLite file at the repo, not the process cwd.
+
+    Blob storage already resolves against the repo root. The database URL did
+    not, so a client that launches ``paper mcp`` from the home directory opens
+    ``~/.data/paper.db`` — an empty file with no ``papers`` table — instead of
+    the migrated database next to this checkout.
+    """
+    if not url.startswith("sqlite"):
+        return url
+    prefix, sep, path = url.partition(":///")
+    if not sep or not path or path.startswith(":memory:"):
+        return url
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return url
+    resolved = (_REPO_ROOT / candidate).resolve()
+    return f"{prefix}:///{resolved.as_posix()}"
 
 
 @functools.lru_cache(maxsize=1)

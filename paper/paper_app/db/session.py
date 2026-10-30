@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -32,6 +32,15 @@ logger = get_logger(__name__)
 _engines: dict[str, AsyncEngine] = {}
 _session_factories: dict[str, async_sessionmaker[AsyncSession]] = {}
 
+#: How long a writer waits for another ingest to finish its transaction.
+#:
+#: SQLite's own default is 5 seconds. Parallel ``ingest_paper`` calls measured
+#: on 2026-10-30 lost that race: one run held the lock across an HTML download
+#: (~6s) and the others raised ``database is locked`` while inserting their
+#: ``ingestion_runs`` row. 30s covers that overlap; the pipeline also commits
+#: before downloads and embedding so the lock is not held for the slow part.
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 def _engine_kwargs(settings: DatabaseSettings) -> dict[str, Any]:
     kwargs: dict[str, Any] = {"echo": settings.echo, "future": True, "pool_pre_ping": settings.pool_pre_ping}
@@ -43,7 +52,20 @@ def _engine_kwargs(settings: DatabaseSettings) -> dict[str, Any]:
         )
     else:
         kwargs.pop("pool_pre_ping", None)
+        kwargs["connect_args"] = {"timeout": _SQLITE_BUSY_TIMEOUT_MS / 1000}
     return kwargs
+
+
+def _enable_sqlite_concurrency(engine: AsyncEngine) -> None:
+    """WAL so readers do not block writers, and a busy timeout so writers wait."""
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _on_connect(dbapi_connection: Any, _connection_record: Any) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 def get_engine(settings: DatabaseSettings | None = None) -> AsyncEngine:
@@ -51,7 +73,10 @@ def get_engine(settings: DatabaseSettings | None = None) -> AsyncEngine:
     if settings.url not in _engines:
         ensure_sqlite_directory(settings.url)
         logger.info("db_engine_created", extra={"url": _redact(settings.url)})
-        _engines[settings.url] = create_async_engine(settings.url, **_engine_kwargs(settings))
+        engine = create_async_engine(settings.url, **_engine_kwargs(settings))
+        if settings.url.startswith("sqlite"):
+            _enable_sqlite_concurrency(engine)
+        _engines[settings.url] = engine
     return _engines[settings.url]
 
 

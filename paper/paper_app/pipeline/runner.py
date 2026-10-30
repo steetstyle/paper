@@ -34,6 +34,7 @@ class PipelineRunner:
     async def run(self, ctx: PipelineContext) -> PipelineContext:
         bind_run_id(ctx.run_id)
         await ctx.runs.mark_running(ctx.run_id, ctx.paper_id)
+        await ctx.release_write_lock()
 
         attempts: dict[str, int] = {}
         fatal: Exception | None = None
